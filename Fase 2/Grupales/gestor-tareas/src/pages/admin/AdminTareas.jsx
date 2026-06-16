@@ -45,7 +45,6 @@ export default function AdminTareas() {
   const [showConfirm, setShowConfirm] = useState({ show: false, type: null });
 
   const infoCodigoSeleccionado = codigos.find(c => c.id === Number(selectedCode));
-
   const [usuariosFiltrados, setUsuariosFiltrados] = useState([]);
 
   async function loadData() {
@@ -80,13 +79,25 @@ export default function AdminTareas() {
   }, [newProyecto, tipoSeleccion]);
 
   async function loadTareas() {
-    // ACTUALIZACIÓN: Incluimos evidencia_url en la query
     const query = `*, codigos_tarea (codigo, descripcion)`;
-    const { data: activas } = await supabase.from("tareas").select(query).eq("revision", "sin_revisar").neq("estado", "Pendiente").order("created_at", { ascending: false });
-    const { data: hist } = await supabase.from("tareas").select(query).in("revision", ["aprobada", "rechazada"]).order("created_at", { ascending: false });
     
-    // ACTUALIZACIÓN: Aseguramos que traiga evidencia_url de las propuestas
-    const { data: prop } = await supabase.from("tareas_propuestas").select("*").order("created_at", { ascending: false });
+    // CORRECCIÓN: Filtramos por "pendiente", que es el valor válido de tu ENUM en Postgres
+    const { data: activas } = await supabase
+      .from("tareas")
+      .select(query)
+      .eq("revision", "pendiente")
+      .order("created_at", { ascending: false });
+
+    const { data: hist } = await supabase
+      .from("tareas")
+      .select(query)
+      .in("revision", ["aprobada", "rechazada"])
+      .order("created_at", { ascending: false });
+    
+    const { data: prop } = await supabase
+      .from("tareas_propuestas")
+      .select("*")
+      .order("created_at", { ascending: false });
     
     setTareasActivas(activas || []);
     setHistorial(hist || []);
@@ -125,7 +136,6 @@ export default function AdminTareas() {
         }]).select().single();
         if (errCod) throw new Error(`Error en Códigos: ${errCod.message}`);
 
-        // ACTUALIZACIÓN: Se añade evidencia_url: propuesta.evidencia_url para que la tarea final herede el archivo
         const { error: errTarea } = await supabase.from("tareas").insert([{
           usuario_id: propuesta.usuario_id,
           nombre_trabajador: propuesta.nombre_trabajador,
@@ -134,9 +144,9 @@ export default function AdminTareas() {
           entregable: entregableConfirmado.nombre,
           codigo_id: codigoData.id,
           horas: propuesta.horas,
-          estado: "Completada",
-          revision: "aprobada",
-          evidencia_url: propuesta.evidencia_url // <--- HEREDA EL ARCHIVO
+          estado: "En Progreso",
+          revision: "pendiente", // Mantener alineado con el ENUM
+          evidencia_url: propuesta.evidencia_url 
         }]);
         if (errTarea) throw new Error(`Error en Tareas: ${errTarea.message}`);
       }
@@ -218,6 +228,7 @@ export default function AdminTareas() {
       }]);
       if (errAsig) throw errAsig;
 
+      // CORRECCIÓN: Cambiado "sin_revisar" por "pendiente" para evitar el error del ENUM de Postgres
       const { error: errTarea } = await supabase.from("tareas").insert([{
         usuario_id: selectedUser,
         nombre_trabajador: usuarioSeleccionado?.nombre || "Usuario",
@@ -225,8 +236,8 @@ export default function AdminTareas() {
         proyecto: codigoSeleccionado.proyecto,
         entregable: codigoSeleccionado.entregable,
         horas: 0,
-        estado: "Pendiente",
-        revision: "sin_revisar",
+        estado: "En Progreso", 
+        revision: "pendiente", 
         fecha: new Date().toISOString().split('T')[0], 
         fecha_vencimiento: fechaVencimiento,
         importancia,
@@ -236,7 +247,7 @@ export default function AdminTareas() {
       }]);
       if (errTarea) throw errTarea;
 
-      setMsg("✅ Tarea vinculada con éxito.");
+      setMsg("✅ Tarea vinculada y enviada al Backlog del trabajador con éxito.");
       setFechaVencimiento("");
       setSelectedUser("");
       setSelectedCode("");
@@ -249,32 +260,32 @@ export default function AdminTareas() {
   }
 
   useEffect(() => {
-  async function fetchRecursosProyecto() {
-    if (!filtroProyectoAsignacion) {
-      setUsuariosFiltrados([]);
-      return;
+    async function fetchRecursosProyecto() {
+      if (!filtroProyectoAsignacion) {
+        setUsuariosFiltrados([]);
+        return;
+      }
+
+      const proyActual = proyectos.find(p => p.nombre === filtroProyectoAsignacion);
+      if (!proyActual) return;
+
+      const { data, error } = await supabase
+        .from("proyecto_recursos")
+        .select("user_id, perfiles(nombre, apellido, activo)")
+        .eq("proyecto_id", proyActual.id);
+
+      if (!error && data) {
+        const mapeados = data
+          .filter(r => r.perfiles?.activo !== false)
+          .map(r => ({
+            id: r.user_id,
+            nombre: `${r.perfiles.nombre} ${r.perfiles.apellido}`
+          }));
+        setUsuariosFiltrados(mapeados);
+      }
     }
-
-    const proyActual = proyectos.find(p => p.nombre === filtroProyectoAsignacion);
-    if (!proyActual) return;
-
-    const { data, error } = await supabase
-      .from("proyecto_recursos")
-      .select("user_id, perfiles(nombre, apellido, activo)")
-      .eq("proyecto_id", proyActual.id);
-
-    if (!error && data) {
-      const mapeados = data
-        .filter(r => r.perfiles?.activo !== false)
-        .map(r => ({
-          id: r.user_id,
-          nombre: `${r.perfiles.nombre} ${r.perfiles.apellido}`
-        }));
-      setUsuariosFiltrados(mapeados);
-    }
-  }
-  fetchRecursosProyecto();
-}, [filtroProyectoAsignacion, proyectos]);
+    fetchRecursosProyecto();
+  }, [filtroProyectoAsignacion, proyectos]);
 
   useEffect(() => { loadData(); loadTareas(); }, []);
 
@@ -290,7 +301,6 @@ export default function AdminTareas() {
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-4 font-sans text-gray-900 relative">
       
-      {/* --- MODAL DE CONFIRMACIÓN --- */}
       {showConfirm.show && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in duration-200">
@@ -332,12 +342,11 @@ export default function AdminTareas() {
           </div>
         </div>
 
-        {/* --- VISTA TAREAS ACTIVAS --- */}
         {vista === "activas" && (
           <div className="bg-white shadow-md rounded-xl p-6 animate-in fade-in duration-300 border-t-4 border-[#6ec5ac]">
             <h2 className="text-xl font-bold mb-6 text-[#6ec5ac]">Por Revisar</h2>
             {tareasActivas.length === 0 ? (
-              <p className="text-center text-gray-400">Sin tareas.</p>
+              <p className="text-center text-gray-400">Sin tareas en revisión activa.</p>
             ) : (
               <div className="space-y-4">
                 {tareasActivas.map((t) => (
@@ -351,7 +360,6 @@ export default function AdminTareas() {
                       <p className="text-xs text-blue-600 font-black uppercase">{t.proyecto} | {t.codigos_tarea?.codigo}</p>
                       <p className="text-sm italic text-gray-700 mt-1 mb-3">"{t.codigos_tarea?.descripcion}"</p>
 
-                      {/* ACTUALIZACIÓN: Botón de Evidencia en Activas */}
                       {t.evidencia_url && (
                         <a href={t.evidencia_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 mb-3 text-[10px] bg-cyan-50 text-cyan-700 px-2 py-1 rounded font-bold hover:bg-cyan-100">
                           📎 VER ARCHIVO ADJUNTO
@@ -378,7 +386,6 @@ export default function AdminTareas() {
           </div>
         )}
 
-        {/* --- VISTA PROPUESTAS --- */}
         {vista === "propuestas" && (
           <div className="bg-white shadow-md rounded-xl p-6 animate-in fade-in duration-300 border-t-4 border-[#e67e22]">
             <h2 className="text-xl font-bold mb-6 text-[#e67e22]">Propuestas Externas (Nuevas)</h2>
@@ -398,7 +405,6 @@ export default function AdminTareas() {
                       </div>
                       <p className="text-sm bg-white p-3 rounded-lg border border-orange-100 italic text-gray-700">"{p.descripcion_propuesta}"</p>
                       
-                      {/* ACTUALIZACIÓN: Botón de Evidencia en Propuestas */}
                       {p.evidencia_url && (
                         <div className="mt-3">
                           <a href={p.evidencia_url} target="_blank" rel="noreferrer" className="text-[10px] bg-orange-100 text-orange-700 px-3 py-1 rounded-full font-bold hover:bg-orange-200 inline-flex items-center gap-1">
@@ -420,7 +426,6 @@ export default function AdminTareas() {
           </div>
         )}
 
-        {/* --- HISTORIAL --- */}
         {vista === "historial" && (
           <div className="bg-white shadow-md rounded-xl p-6 animate-in fade-in duration-300 border-t-4 border-[#4b4b54]">
             <h2 className="text-xl font-bold mb-6 text-[#4b4b54]">Historial de Revisiones</h2>
@@ -447,7 +452,6 @@ export default function AdminTareas() {
                       </td>
                       <td className="py-3 text-gray-600 font-bold">{h.horas}h</td>
                       
-                      {/* ACTUALIZACIÓN: Columna Archivo en Historial */}
                       <td className="py-3">
                         {h.evidencia_url ? (
                           <a href={h.evidencia_url} target="_blank" rel="noreferrer" className="text-cyan-600 hover:text-cyan-800 font-bold text-[10px]">VER</a>
@@ -469,7 +473,6 @@ export default function AdminTareas() {
           </div>
         )}
 
-        {/* ... (Resto del componente: SECCIÓN CREAR Y ASIGNAR sin cambios) ... */}
         <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-xl shadow border-l-4 border-[#387a8b]">
               <h2 className="font-bold text-[#387a8b] mb-4 uppercase text-xs tracking-widest">1. Definir Nuevo Código</h2>
@@ -506,7 +509,7 @@ export default function AdminTareas() {
                   {usuariosFiltrados.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
                 </select>
                 <label className="text-[10px] font-bold text-gray-400 uppercase">3. Hito / Entregable</label>
-                <select className="w-full p-2 border border-blue-200 rounded text-sm bg-blue-50/50" value={filtroEntregableAsignacion} disabled={!filtroProyectoAsignacion} onChange={e => {setFiltroEntregableAsignacion(e.target.value); setSelectedCode("");}}>
+                <select className="w-full p-2 border border-blue-200 rounded text-sm bg-blue-50/50" value={filtroEntregableAsignacion} disabled={!filtroProyectoAsignacion} onChange={e => {setFiltableEntregableAsignacion(e.target.value); setSelectedCode("");}}>
                   <option value="">Todos los entregables...</option>
                   {[...new Set(codigos.filter(c => c.proyecto === filtroProyectoAsignacion).map(c => c.entregable))].map(ent => (
                     <option key={ent} value={ent}>{ent}</option>

@@ -23,88 +23,97 @@ export default function SuperTaskManager() {
   const [evento, setEvento] = useState({ tipo: "Incidencia", desc: "", hh: 1 });
 
   const getToday = () => new Date().toISOString().split("T")[0];
-  //const getToday = () => "2026-02-10"; // Prueba
 
   useEffect(() => {
     fetchData();
   }, []);
 
   async function fetchData() {
-  setLoading(true);
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return setLoading(false);
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      console.warn("⚠️ DEBUG: No se encontró ningún usuario logueado en Supabase.");
+      return setLoading(false);
+    }
 
-  const hoy = getToday();
+    const hoy = getToday();
 
-  // 1. Cargar Planificación del día
-  const { data: planHoy } = await supabase
-    .from("planificacion_diaria")
-    .select(`
-      id,
-      estado_plan,
-      progreso_reportado,
-      tarea_id,
-      comentario_admin,
-      tareas (
-        id, entregable, proyecto, estado, revision, horas,
-        importancia, urgencia, dificultad,
-        codigos_tarea (codigo)
-      )
-    `)
-    .eq("usuario_id", user.id)
-    .eq("fecha", hoy);
+    // 1. Cargar Planificación del día
+    const { data: planHoy, error: errorPlanHoy } = await supabase
+      .from("planificacion_diaria")
+      .select(`
+        id,
+        estado_plan,
+        progreso_reportado,
+        tarea_id,
+        comentario_admin,
+        tareas (
+          id, entregable, proyecto, estado, revision, horas,
+          importancia, urgencia, dificultad,
+          codigos_tarea (codigo)
+        )
+      `)
+      .eq("usuario_id", user.id)
+      .eq("fecha", hoy);
 
-  // LÓGICA DE REINICIO: 
-  // Si no hay plan O si el plan existente está marcado como 'rechazado'
-  const planEsValido = planHoy && planHoy.length > 0 && planHoy.some(p => p.estado_plan !== 'rechazado');
+    if (errorPlanHoy) {
+      console.error("❌ DEBUG ERROR [planificacion_diaria]:", errorPlanHoy);
+    }
 
-  if (planEsValido) {
-    const formatted = planHoy.map(p => ({
-      ...p.tareas,
-      plan_id: p.id,
-      estado_plan: p.estado_plan,
-      progreso_actual: p.progreso_reportado,
-      comentario_admin: p.comentario_admin
-    }));
-    setDailyPlan(formatted);
-    setIsSent(true); 
-  } else {
-    // Si fue rechazado o no hay nada, reseteamos para permitir nueva selección
-    setDailyPlan([]);
-    setIsSent(false); 
+    const planEsValido = planHoy && planHoy.length > 0 && planHoy.some(p => p.estado_plan !== 'rechazado');
+
+    if (planEsValido) {
+      const formatted = planHoy.map(p => ({
+        ...p.tareas,
+        plan_id: p.id,
+        estado_plan: p.estado_plan,
+        progreso_actual: p.progreso_reportado,
+        comentario_admin: p.comentario_admin
+      }));
+      setDailyPlan(formatted);
+      setIsSent(true); 
+    } else {
+      setDailyPlan([]);
+      setIsSent(false); 
+    }
+
+    // 2. Cargar Backlog de Tareas Asignadas (Filtro Corregido)
+    const { data: backlog, error: errorBacklog } = await supabase
+      .from("tareas")
+      .select(`
+        *, 
+        codigos_tarea (
+          id, codigo, descripcion,
+          tareas ( estado, revision )
+        )
+      `)
+      .eq("usuario_id", user.id)
+      .order("id", { ascending: false });
+
+    console.log("--- 🕵️‍♂️ INICIO DE CONTROL DEBUG DE TAREAS ---");
+    console.log("1. ID del usuario logueado actual:", user.id);
+    console.log("2. ¿Hubo error de Supabase al traer tareas?:", errorBacklog || "Ninguno. Todo OK con el servidor.");
+    console.log("3. Tareas 'crudas' devueltas por la Base de Datos:", backlog);
+
+    if (backlog) {
+      // CORRECCIÓN: La tarea solo se oculta si ya se completó Y fue aprobada por el admin.
+      // De lo contrario, permanecerá visible en tu Backlog para que puedas seguir sumando horas.
+      const finalTasks = backlog.filter(tarea => {
+        const terminadaYArchivada = tarea.estado === "Completada" && tarea.revision === "aprobada";
+        return !terminadaYArchivada; 
+      });
+      
+      console.log("4. Tareas finales tras filtros de React (lo que debería pintarse):", finalTasks);
+      console.log("--- 🕵️‍♂️ FIN DE CONTROL DEBUG TAREAS ---");
+      
+      setTasks(finalTasks);
+    } else {
+      console.log("4. Tareas finales: El backlog vino nulo.");
+      console.log("--- 🕵️‍♂️ FIN DE CONTROL DEBUG TAREAS ---");
+    }
+
+    setLoading(false);
   }
-
-  // 2. Cargar Backlog (Mantenemos tu lógica de filtros anterior)
-  const { data: backlog } = await supabase
-    .from("tareas")
-    .select(`
-      *, 
-      codigos_tarea (
-        id, codigo, descripcion,
-        tareas ( estado, revision )
-      )
-    `)
-    .eq("usuario_id", user.id)
-    .order("id", { ascending: false });
-
-  if (backlog) {
-    const codigosVistos = new Set();
-    const finalTasks = backlog.filter(tarea => {
-      const aprobadaYFinalizada = 
-        (tarea.estado === "Completada" && tarea.revision === "aprobada") || 
-        tarea.codigos_tarea?.tareas?.some(t => t.estado === "Completada" && t.revision === "aprobada");
-
-      if (aprobadaYFinalizada) return false;
-
-      const idDelCodigo = tarea.codigo_id; 
-      if (codigosVistos.has(idDelCodigo)) return false; 
-      codigosVistos.add(idDelCodigo);
-      return true; 
-    });
-    setTasks(finalTasks);
-  }
-  setLoading(false);
-}
 
   const toggleTaskInPlan = (task) => {
     if (isSent) return;
@@ -118,7 +127,6 @@ export default function SuperTaskManager() {
     if (dailyPlan.length === 0) return alert("Selecciona tareas primero.");
     const { data: { user } } = await supabase.auth.getUser();
 
-    // ENVÍO AL ADMIN: Estado inicial 'propuesto'
     const registros = dailyPlan.map(t => ({
       usuario_id: user.id,
       tarea_id: t.id,
@@ -142,11 +150,9 @@ export default function SuperTaskManager() {
       setUploading(true);
       let fileUrl = null;
 
-      // 1. Obtener el usuario actual
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("No hay sesión activa");
 
-      // Intentamos sacar el correo, si falla usamos el ID para que no se pierda la foto
       const userIdentifier = user.email 
         ? user.email.split('@')[0].replace(/[.]/g, '_') 
         : user.id;
@@ -154,13 +160,10 @@ export default function SuperTaskManager() {
       const userFolder = userIdentifier; 
 
       if (file) {
-        // Agregamos un timestamp al nombre del archivo para que no se sobrescriban
         const timestamp = Date.now();
         const fileName = `${timestamp}_${file.name.replace(/\s/g, '_')}`;
-        
         const filePath = `${userFolder}/${fileName}`;
 
-        // Subida a Supabase
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('evidencias_tareas')
           .upload(filePath, file, {
@@ -176,7 +179,6 @@ export default function SuperTaskManager() {
         
         fileUrl = publicUrl;
 
-        // Descarga local (opcional, tal cual la tenías)
         const blobUrl = URL.createObjectURL(file);
         const link = document.createElement('a');
         link.href = blobUrl;
@@ -187,40 +189,34 @@ export default function SuperTaskManager() {
         URL.revokeObjectURL(blobUrl);
       }
 
-      // --- RESTO DE LA LÓGICA DE ACTUALIZACIÓN DE TABLAS ---
       let nuevoEstado = parseInt(progreso) >= 100 ? "Completada" : "En Progreso";
       const horasNum = parseFloat(horas);
-      // Usamos el acumulado de la tarea que viene en el modal
       const horasPrevias = parseFloat(showReportingModal.horas || 0);
 
-      // 1. Actualización en Planificación Diaria (Historial del día)
       const { error: errorPlan } = await supabase
         .from("planificacion_diaria")
         .update({
           horas_reales: horasNum,
           progreso_reportado: progreso,
           comentarios_cierre: comentario,
-          evidencia_url: fileUrl, // Se guarda el link en el registro del día
+          evidencia_url: fileUrl, 
           estado_plan: "finalizado"
         })
         .eq("id", showReportingModal.plan_id);
 
       if (errorPlan) throw errorPlan;
 
-      // 2. Actualización en Tareas (Tabla Maestra)
-      // Agregamos evidencia_url para que la tarea siempre tenga el link del último archivo
       const { error: errorTarea } = await supabase
         .from("tareas")
         .update({
           estado: nuevoEstado,
           horas: horasPrevias + horasNum,
-          evidencia_url: fileUrl // <--- ACTUALIZACIÓN SOLICITADA
+          evidencia_url: fileUrl 
         })
         .eq("id", showReportingModal.id);
 
       if (errorTarea) throw errorTarea;
 
-      // Limpieza de estados y cierre de modal
       setShowReportingModal(null);
       setProgreso(0);
       setComentario("");
@@ -241,7 +237,6 @@ export default function SuperTaskManager() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuario no autenticado");
 
-      // Validación simple para evitar registros vacíos
       if (!evento.desc.trim()) {
         alert("Por favor, describe el suceso.");
         return;
@@ -252,7 +247,7 @@ export default function SuperTaskManager() {
           usuario_id: user.id,
           tipo: evento.tipo,
           descripcion: evento.desc,
-          horas_afectadas: parseFloat(evento.hh), // Aseguramos que sea número
+          horas_afectadas: parseFloat(evento.hh), 
           fecha: getToday(),
         },
       ]);
@@ -261,7 +256,7 @@ export default function SuperTaskManager() {
 
       alert("Evento registrado con éxito");
       setShowEventModal(false);
-      setEvento({ tipo: "Incidencia Técnica", desc: "", hh: 1 }); // Reset con valor inicial del select
+      setEvento({ tipo: "Incidencia Técnica", desc: "", hh: 1 }); 
       
     } catch (err) {
       console.error("Error al guardar evento:", err);
@@ -270,7 +265,6 @@ export default function SuperTaskManager() {
   };
 
   if (loading) return <div className="p-20 text-center font-bold text-cyan-700 animate-pulse">CARGANDO...</div>;
-
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
@@ -334,76 +328,73 @@ export default function SuperTaskManager() {
         </div>
 
         {/* COLUMNA DERECHA: PANEL DE CONTROL DIARIO */}
-<div className="lg:col-span-5 space-y-4">
-  <div className="bg-[#37788a] rounded-[3.5rem] p-10 text-white shadow-2xl sticky top-8 border-4 border-white/20">
-    <div className="flex justify-between items-center mb-10">
-      <div>
-        <h2 className="text-3xl font-black italic uppercase tracking-tighter leading-none">Mi Jornada</h2>
-        <p className="text-[10px] font-black text-white/50 uppercase mt-2 tracking-widest">{getToday()}</p>
-      </div>
-      <button onClick={() => setShowEventModal(true)} className="bg-white/10 hover:bg-white/30 p-4 rounded-3xl transition-all active:scale-90">
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-      </button>
-    </div>
-
-    {/* LISTADO DE TAREAS */}
-    <div className="space-y-4 min-h-[300px]">
-      {dailyPlan.map(item => (
-        <div key={item.id} className="bg-white/10 backdrop-blur-2xl p-6 rounded-[2.5rem] border border-white/10 group transition-all">
-          <div className="flex justify-between items-center">
-            <div className="max-w-[65%]">
-                <span className="text-[8px] font-black text-white/40 uppercase block mb-1">
-                  {item.codigos_tarea?.codigo}
-                </span>
-                <p className="font-black text-sm uppercase leading-tight">{item.entregable}</p>
+        <div className="lg:col-span-5 space-y-4">
+          <div className="bg-[#37788a] rounded-[3.5rem] p-10 text-white shadow-2xl sticky top-8 border-4 border-white/20">
+            <div className="flex justify-between items-center mb-10">
+              <div>
+                <h2 className="text-3xl font-black italic uppercase tracking-tighter leading-none">Mi Jornada</h2>
+                <p className="text-[10px] font-black text-white/50 uppercase mt-2 tracking-widest">{getToday()}</p>
+              </div>
+              <button onClick={() => setShowEventModal(true)} className="bg-white/10 hover:bg-white/30 p-4 rounded-3xl transition-all active:scale-90">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </button>
             </div>
-            
-            {item.estado_plan === 'aprobado' ? (
-  <button onClick={() => setShowReportingModal(item)} className="bg-white text-[#37788a] px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-orange-400 hover:text-white transition-all">Reportar</button>
-) : item.estado_plan === 'finalizado' ? (
-  <div className="p-3 bg-white/20 rounded-2xl text-white font-black text-[9px] uppercase italic tracking-widest">Listo</div>
-) : item.estado_plan === 'rechazado' ? (
-  <span className="text-[8px] font-black uppercase text-red-400 italic">Rechazado por Jefe</span>
-) : (
-  <span className="text-[8px] font-black uppercase text-orange-200 animate-pulse italic">En Revisión</span>
-)}
+
+            <div className="space-y-4 min-h-[300px]">
+              {dailyPlan.map(item => (
+                <div key={item.id} className="bg-white/10 backdrop-blur-2xl p-6 rounded-[2.5rem] border border-white/10 group transition-all">
+                  <div className="flex justify-between items-center">
+                    <div className="max-w-[65%]">
+                        <span className="text-[8px] font-black text-white/40 uppercase block mb-1">
+                          {item.codigos_tarea?.codigo}
+                        </span>
+                        <p className="font-black text-sm uppercase leading-tight">{item.entregable}</p>
+                    </div>
+                    
+                    {item.estado_plan === 'aprobado' ? (
+                      <button onClick={() => setShowReportingModal(item)} className="bg-white text-[#37788a] px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-orange-400 hover:text-white transition-all">Reportar</button>
+                    ) : item.estado_plan === 'finalizado' ? (
+                      <div className="p-3 bg-white/20 rounded-2xl text-white font-black text-[9px] uppercase italic tracking-widest">Listo</div>
+                    ) : item.estado_plan === 'rechazado' ? (
+                      <span className="text-[8px] font-black uppercase text-red-400 italic">Rechazado por Jefe</span>
+                    ) : (
+                      <span className="text-[8px] font-black uppercase text-orange-200 animate-pulse italic">En Revisión</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {dailyPlan.length === 0 && (
+                <div className="h-64 flex items-center justify-center border-2 border-dashed border-white/10 rounded-[3rem]">
+                  <p className="text-white/20 text-xs font-black uppercase tracking-widest text-center leading-loose">No hay tareas<br/>seleccionadas</p>
+                </div>
+              )}
+            </div>
+
+            {dailyPlan.length > 0 && dailyPlan.find(t => t.comentario_admin) && (
+              <div className="mt-8 bg-slate-900/40 border border-white/10 p-6 rounded-[2.5rem] backdrop-blur-md">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
+                  <p className="text-[9px] font-black text-amber-400 uppercase tracking-[0.2em]">Instrucciones del Administrador</p>
+                </div>
+                <p className="text-xs text-white/90 font-medium leading-relaxed italic ml-5">
+                  "{dailyPlan.find(t => t.comentario_admin)?.comentario_admin}"
+                </p>
+              </div>
+            )}
+
+            <div className="pt-10">
+              {!isSent ? (
+                <button onClick={handleSendProposal} className="w-full bg-orange-400 hover:bg-orange-500 py-7 rounded-[2.5rem] font-black uppercase text-sm tracking-[0.2em] shadow-2xl transition-all transform active:scale-95">Activar Jornada</button>
+              ) : (
+                <div className="text-center p-6 bg-slate-900/30 rounded-[2.5rem] border border-white/5 backdrop-blur-lg">
+                  <p className="text-[11px] font-black text-white uppercase tracking-[0.4em]">Control de Jornada Activo</p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      ))}
-
-      {dailyPlan.length === 0 && (
-        <div className="h-64 flex items-center justify-center border-2 border-dashed border-white/10 rounded-[3rem]">
-          <p className="text-white/20 text-xs font-black uppercase tracking-widest text-center leading-loose">No hay tareas<br/>seleccionadas</p>
-        </div>
-      )}
-    </div>
-
-    {/* --- SECCIÓN GLOBAL: COMENTARIO DE ADMIN --- */}
-    {dailyPlan.length > 0 && dailyPlan.find(t => t.comentario_admin) && (
-      <div className="mt-8 bg-slate-900/40 border border-white/10 p-6 rounded-[2.5rem] backdrop-blur-md">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
-          <p className="text-[9px] font-black text-amber-400 uppercase tracking-[0.2em]">Instrucciones del Administrador</p>
-        </div>
-        <p className="text-xs text-white/90 font-medium leading-relaxed italic ml-5">
-          "{dailyPlan.find(t => t.comentario_admin)?.comentario_admin}"
-        </p>
       </div>
-    )}
-
-    {/* ACCIÓN PRINCIPAL */}
-    <div className="pt-10">
-      {!isSent ? (
-        <button onClick={handleSendProposal} className="w-full bg-orange-400 hover:bg-orange-500 py-7 rounded-[2.5rem] font-black uppercase text-sm tracking-[0.2em] shadow-2xl transition-all transform active:scale-95">Activar Jornada</button>
-      ) : (
-        <div className="text-center p-6 bg-slate-900/30 rounded-[2.5rem] border border-white/5 backdrop-blur-lg">
-          <p className="text-[11px] font-black text-white uppercase tracking-[0.4em]">Control de Jornada Activo</p>
-        </div>
-      )}
-    </div>
-  </div>
-</div>
-</div>
 
       {/* MODAL DE REPORTE DIARIO */}
       {showReportingModal && (
@@ -426,8 +417,6 @@ export default function SuperTaskManager() {
               </header>
               
               <div className="space-y-6">
-                
-
                 <div className="bg-slate-50 p-8 rounded-[3rem] border border-slate-100 shadow-inner">
                   <div className="flex justify-between items-center mb-6">
                     <label className="text-[10px] font-black uppercase text-slate-400">Progreso</label>
@@ -450,25 +439,24 @@ export default function SuperTaskManager() {
                 </div>
 
                 <div className="bg-slate-50 p-6 rounded-3xl border border-dashed border-slate-300">
-                <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">
-                  Evidencia (Documentos u Imágenes)
-                </label>
-                <input 
-                  type="file" 
-                  // Se agregan los MIME types de Word, Excel y PDF
-                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip"
-                  onChange={(e) => setFile(e.target.files[0])}
-                  className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-[10px] file:font-black file:uppercase file:bg-[#37788a] file:text-white hover:file:bg-slate-800 cursor-pointer"
-                />
-                {file && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="text-[10px] text-cyan-700 font-bold italic">✓ {file.name}</span>
-                    <span className="text-[8px] bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded-full uppercase font-black">
-                      {(file.size / 1024 / 1024).toFixed(2)} MB
-                    </span>
-                  </div>
-                )}
-              </div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">
+                    Evidencia (Documentos u Imágenes)
+                  </label>
+                  <input 
+                    type="file" 
+                    accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip"
+                    onChange={(e) => setFile(e.target.files[0])}
+                    className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-[10px] file:font-black file:uppercase file:bg-[#37788a] file:text-white hover:file:bg-slate-800 cursor-pointer"
+                  />
+                  {file && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="text-[10px] text-cyan-700 font-bold italic">✓ {file.name}</span>
+                      <span className="text-[8px] bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded-full uppercase font-black">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </span>
+                    </div>
+                  )}
+                </div>
 
                 <textarea 
                   className="w-full p-6 bg-slate-50 border border-slate-100 rounded-3xl text-sm font-medium outline-none h-24 resize-none" 
@@ -478,14 +466,14 @@ export default function SuperTaskManager() {
                 />
 
                 <div className="flex flex-col gap-4">
-                <button 
-                  onClick={submitTaskReport} 
-                  disabled={uploading}
-                  className={`w-full ${uploading ? 'bg-slate-400' : 'bg-[#37788a]'} text-white py-6 rounded-[2.5rem] font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition-all`}
-                >
-                  {uploading ? "Subiendo Archivo..." : "Sincronizar Reporte"}
-                </button>                  
-                <button onClick={() => setShowReportingModal(null)} className="text-slate-400 font-black text-[10px] uppercase tracking-widest hover:text-slate-600 transition-colors">Cancelar</button>
+                  <button 
+                    onClick={submitTaskReport} 
+                    disabled={uploading}
+                    className={`w-full ${uploading ? 'bg-slate-400' : 'bg-[#37788a]'} text-white py-6 rounded-[2.5rem] font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition-all`}
+                  >
+                    {uploading ? "Subiendo Archivo..." : "Sincronizar Reporte"}
+                  </button>                  
+                  <button onClick={() => setShowReportingModal(null)} className="text-slate-400 font-black text-[10px] uppercase tracking-widest hover:text-slate-600 transition-colors">Cancelar</button>
                 </div>
               </div>
            </div>
