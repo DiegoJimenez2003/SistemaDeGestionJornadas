@@ -65,8 +65,8 @@ export default function Header() {
         {/* LOGO */}
         <div className="flex items-center gap-3">
           <img
-            src={AlloyLogo}
-            alt="Alloy Logo"
+            src={DuocLogo}
+            alt="Duoc Logo"
             className="h-12 w-auto object-contain select-none"
           />
         </div>

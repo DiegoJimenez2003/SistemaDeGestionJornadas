@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useSession } from "../Providers/SessionProvider";
-import AlloyLogo from "../assets/User.png";
+import DuocDefaultUser from "../assets/User.png";
 import { useNavigate } from "react-router-dom";
 import { CameraIcon, LogOut, Calendar } from "lucide-react"; 
 import confetti from "canvas-confetti";
@@ -99,7 +99,7 @@ export default function Perfil() {
         {esCumpleaños && (
           <div className="mb-8 p-4 bg-gradient-to-r from-[#6ec5ac]/20 to-[#37788a]/20 rounded-2xl border border-[#6ec5ac]/30 animate-pulse text-center">
             <h3 className="text-[#37788a] font-black text-xl uppercase tracking-tighter">✨ ¡Feliz Cumpleaños, {userData.nombre}! ✨</h3>
-            <p className="text-slate-600 text-sm font-medium">Todo el equipo de Alloy te desea un día increíble 🎂</p>
+            <p className="text-slate-600 text-sm font-medium">Todo el equipo de Duoc te desea un día increíble 🎂</p>
           </div>
         )}
 
@@ -109,7 +109,7 @@ export default function Perfil() {
             {/* Foto estática con anillo verde suave solo si es cumple */}
             <div className={`h-32 w-32 sm:h-40 sm:w-40 rounded-full overflow-hidden border-4 border-white shadow-xl transition-transform duration-300 group-hover:scale-105 ${uploading ? 'opacity-50' : ''} ${esCumpleaños ? 'ring-4 ring-[#6ec5ac] ring-offset-2' : ''}`}>
               <img
-                src={avatarUrl || AlloyLogo}
+                src={avatarUrl || DuocDefaultUser}
                 alt="Avatar"
                 className="h-full w-full object-cover"
               />
