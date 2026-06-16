@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import AlloyLogo from "../assets/alloylogo.png"; 
+import DuocLogo from "../assets/logoduoc.png";
 import { 
   Users, Clock, FileCheck, AlertCircle, 
   BarChart3, Trophy, Calendar, PieChart as PieIcon, 

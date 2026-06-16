@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useNavigate } from "react-router-dom";
-import AlloyLogo from "../assets/alloylogo.png";
+import DuocLogo from "../assets/logoduoc.png";
 
-const isValidAlloyEmail = (email) =>
-  email.toLowerCase().endsWith("@alloyingenieria.com");
+const isValidDuocEmail = (email) =>
+  email.toLowerCase().endsWith("@duocuc.cl"); // Cambia por @duoc.cl si corresponde
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -20,46 +20,46 @@ export default function Login() {
   const navigate = useNavigate();
 
   useEffect(() => {
-  const checkSession = async () => {
-    const hash = window.location.hash;
-    
-    // 1. Si hay rastro de recuperación en la URL, activamos modo recovery
-    // y abortamos cualquier otra lógica de este efecto.
-    if (hash.includes("type=recovery") || hash.includes("access_token")) {
-      setMode("recovery");
-      return; 
-    }
-
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      navigate("/dashboard");
-    }
-  };
-
-  checkSession();
-
-  const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-    console.log("Evento detectado:", event);
-
-    if (event === "PASSWORD_RECOVERY") {
-      setMode("recovery");
-    } 
-    // 2. SOLO navegamos al dashboard si el evento es inicio de sesión 
-    // Y NO estamos en modo recuperación.
-    else if (event === "SIGNED_IN") {
-      // Revisamos la URL un segundo antes de redirigir
-      if (!window.location.hash.includes("type=recovery")) {
-        navigate("/dashboard");
-      } else {
+    const checkSession = async () => {
+      const hash = window.location.hash;
+      
+      // 1. Si hay rastro de recuperación en la URL, activamos modo recovery
+      // y abortamos cualquier otra lógica de este efecto.
+      if (hash.includes("type=recovery") || hash.includes("access_token")) {
         setMode("recovery");
+        return; 
       }
-    }
-  });
 
-  return () => {
-    authListener.subscription.unsubscribe();
-  };
-}, [navigate]);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        navigate("/dashboard");
+      }
+    };
+
+    checkSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("Evento detectado:", event);
+
+      if (event === "PASSWORD_RECOVERY") {
+        setMode("recovery");
+      } 
+      // 2. SOLO navegamos al dashboard si el evento es inicio de sesión 
+      // Y NO estamos en modo recuperación.
+      else if (event === "SIGNED_IN") {
+        // Revisamos la URL un segundo antes de redirigir
+        if (!window.location.hash.includes("type=recovery")) {
+          navigate("/dashboard");
+        } else {
+          setMode("recovery");
+        }
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [navigate]);
 
 
   /* ===========================
@@ -67,7 +67,7 @@ export default function Login() {
   ============================ */
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!isValidAlloyEmail(email)) return alert("Correo inválido");
+    if (!isValidDuocEmail(email)) return alert("Correo inválido");
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
@@ -80,7 +80,7 @@ export default function Login() {
   ============================ */
   const handleRegister = async (e) => {
     e.preventDefault();
-    if (!isValidAlloyEmail(email)) return alert("Correo inválido");
+    if (!isValidDuocEmail(email)) return alert("Correo inválido");
     if (!email || !password || !nombre || !apellido || !fechaNacimiento || !fechaIngreso || !cargo) {
       return alert("Por favor, completa todos los campos.");
     }
@@ -108,17 +108,16 @@ export default function Login() {
       RECUPERAR (Solicitud)
   ============================ */
   const handleResetPassword = async () => {
-  if (!email) return alert("Ingresa tu correo.");
-  setLoading(true);
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    // Es mejor ser explícito con la URL que configuraste en el Dashboard
-    redirectTo: `${window.location.origin}`, 
-  });
-  setLoading(false);
+    if (!email) return alert("Ingresa tu correo.");
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}`, 
+    });
+    setLoading(false);
 
-  if (error) return alert(error.message);
-  alert("Revisa tu correo, hemos enviado un enlace para restablecer tu clave.");
-};
+    if (error) return alert(error.message);
+    alert("Revisa tu correo, hemos enviado un enlace para restablecer tu clave.");
+  };
 
   /* ===========================
       ACTUALIZAR CLAVE (Final)
@@ -141,7 +140,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-tr from-[#37788a] to-[#6ec5ac] px-4">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md flex flex-col items-center p-8 sm:p-10">
-        <img src={AlloyLogo} alt="Alloy Logo" className="h-20 w-auto mb-6 object-contain select-none" />
+        <img src={DuocLogo} alt="Duoc Logo" className="h-20 w-auto mb-6 object-contain select-none" />
 
         <h1 className="text-3xl sm:text-4xl font-extrabold mb-2 text-[#37788a] text-center">
           {mode === "recovery" ? "Nueva Contraseña" : mode === "login" ? "¡Bienvenido!" : "Crea tu cuenta"}
@@ -153,7 +152,7 @@ export default function Login() {
             : mode === "login" 
             ? "Ingresa al sistema de gestión de tareas de " 
             : "Regístrate en el sistema de gestión de tareas de "}
-          <span className="font-semibold text-[#6ec5ac]">App Alloy</span>
+          <span className="font-semibold text-[#6ec5ac]">App Duoc</span>
         </p>
 
         <form 
@@ -205,7 +204,7 @@ export default function Login() {
           ) : mode === "login" ? (
             <>
               <button onClick={handleResetPassword} className="text-[#37788a] font-semibold hover:underline">¿Olvidaste tu contraseña?</button>
-              <button onClick={() => setMode("register")} className="text-[#6ec5ac] font-semibold hover:underline">Crear cuenta</button>
+              <button onClick={() => setMode("register")} className="text-[#6ec5ac] font-semibold hover:underline">Crea tu cuenta</button>
             </>
           ) : (
             <button onClick={() => setMode("login")} className="text-[#37788a] font-semibold hover:underline">Volver al login</button>
