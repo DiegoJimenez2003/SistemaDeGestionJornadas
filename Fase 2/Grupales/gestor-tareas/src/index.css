@@ -1,0 +1,15 @@
+@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .input {
+    @apply w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#37788a];
+  }
+}
+
+/* Estilo base del body */
+body {
+  @apply bg-gray-100 text-gray-900;
+}
