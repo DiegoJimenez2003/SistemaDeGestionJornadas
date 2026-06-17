@@ -81,7 +81,6 @@ export default function AdminTareas() {
   async function loadTareas() {
     const query = `*, codigos_tarea (codigo, descripcion)`;
     
-    // CORRECCIÓN: Filtramos por "pendiente", que es el valor válido de tu ENUM en Postgres
     const { data: activas } = await supabase
       .from("tareas")
       .select(query)
@@ -145,7 +144,7 @@ export default function AdminTareas() {
           codigo_id: codigoData.id,
           horas: propuesta.horas,
           estado: "En Progreso",
-          revision: "pendiente", // Mantener alineado con el ENUM
+          revision: "pendiente",
           evidencia_url: propuesta.evidencia_url 
         }]);
         if (errTarea) throw new Error(`Error en Tareas: ${errTarea.message}`);
@@ -228,7 +227,6 @@ export default function AdminTareas() {
       }]);
       if (errAsig) throw errAsig;
 
-      // CORRECCIÓN: Cambiado "sin_revisar" por "pendiente" para evitar el error del ENUM de Postgres
       const { error: errTarea } = await supabase.from("tareas").insert([{
         usuario_id: selectedUser,
         nombre_trabajador: usuarioSeleccionado?.nombre || "Usuario",
@@ -509,7 +507,7 @@ export default function AdminTareas() {
                   {usuariosFiltrados.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
                 </select>
                 <label className="text-[10px] font-bold text-gray-400 uppercase">3. Hito / Entregable</label>
-                <select className="w-full p-2 border border-blue-200 rounded text-sm bg-blue-50/50" value={filtroEntregableAsignacion} disabled={!filtroProyectoAsignacion} onChange={e => {setFiltableEntregableAsignacion(e.target.value); setSelectedCode("");}}>
+                <select className="w-full p-2 border border-blue-200 rounded text-sm bg-blue-50/50" value={filtroEntregableAsignacion} disabled={!filtroProyectoAsignacion} onChange={e => {setFiltroEntregableAsignacion(e.target.value); setSelectedCode("");}}>
                   <option value="">Todos los entregables...</option>
                   {[...new Set(codigos.filter(c => c.proyecto === filtroProyectoAsignacion).map(c => c.entregable))].map(ent => (
                     <option key={ent} value={ent}>{ent}</option>
