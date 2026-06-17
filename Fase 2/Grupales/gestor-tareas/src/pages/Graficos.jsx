@@ -169,10 +169,10 @@ export default function AdminDashboard() {
     doc.text(`GENERADO: ${new Date().toLocaleString()}`, 14, 35);
 
     // --- LOGO DE LA EMPRESA ---
-    if (AlloyLogo) {
+    if (DuocLogo) {
       try {
         // x=165, y=5, ancho=30, alto=30 (Ajustado para formato .png)
-        doc.addImage(AlloyLogo, 'PNG', 160, 10, 40, 0, undefined, 'FAST');
+        doc.addImage(DuocLogo, 'PNG', 160, 10, 40, 0, undefined, 'FAST');
       } catch (error) {
         console.warn("No se pudo cargar el logo:", error);
       }
