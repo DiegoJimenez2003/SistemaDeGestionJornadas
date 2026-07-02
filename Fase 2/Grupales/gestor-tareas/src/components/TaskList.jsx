@@ -22,8 +22,11 @@ export default function SuperTaskManager() {
   // Estado para Eventos
   const [evento, setEvento] = useState({ tipo: "Incidencia", desc: "", hh: 1 });
 
-  const getToday = () => new Date().toISOString().split("T")[0];
-
+const getToday = () => {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Santiago",
+  }).format(new Date());
+};
   useEffect(() => {
     fetchData();
   }, []);
@@ -60,22 +63,28 @@ export default function SuperTaskManager() {
       console.error("❌ DEBUG ERROR [planificacion_diaria]:", errorPlanHoy);
     }
 
-    const planEsValido = planHoy && planHoy.length > 0 && planHoy.some(p => p.estado_plan !== 'rechazado');
+    const jornadasActivas =
+  (planHoy || []).filter(
+    p =>
+      p.estado_plan !== "rechazado" &&
+      p.estado_plan !== "finalizado"
+  );
 
-    if (planEsValido) {
-      const formatted = planHoy.map(p => ({
-        ...p.tareas,
-        plan_id: p.id,
-        estado_plan: p.estado_plan,
-        progreso_actual: p.progreso_reportado,
-        comentario_admin: p.comentario_admin
-      }));
-      setDailyPlan(formatted);
-      setIsSent(true); 
-    } else {
-      setDailyPlan([]);
-      setIsSent(false); 
-    }
+if (jornadasActivas.length > 0) {
+  const formatted = jornadasActivas.map(p => ({
+    ...p.tareas,
+    plan_id: p.id,
+    estado_plan: p.estado_plan,
+    progreso_actual: p.progreso_reportado,
+    comentario_admin: p.comentario_admin,
+  }));
+
+  setDailyPlan(formatted);
+  setIsSent(true);
+} else {
+  setDailyPlan([]);
+  setIsSent(false);
+}
 
     // 2. Cargar Backlog de Tareas Asignadas (Filtro Corregido)
     const { data: backlog, error: errorBacklog } = await supabase
