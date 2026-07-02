@@ -34,7 +34,7 @@ export default function AdminProyectos() {
   const [msg, setMsg] = useState("");
   const [trabajadores, setTrabajadores] = useState([]); 
 
-  // NUEVO: Estado para el filtro de clientes en el historial
+  // Filtro de clientes en el historial
   const [filtroCliente, setFiltroCliente] = useState("");
 
   // ESTADOS EDICIÓN DE PROYECTO (DENTRO DEL ACORDEÓN)
@@ -95,7 +95,6 @@ export default function AdminProyectos() {
     } else {
       setProyectoExpandido(proyecto.id);
       
-      // Inicializamos los valores actuales del proyecto para poder editarlos
       setEditFechas({
         id: proyecto.id,
         inicioReal: proyecto.fecha_inicio_real || "",
@@ -112,7 +111,7 @@ export default function AdminProyectos() {
     }
   }
 
-  // NUEVO: Función para actualizar las fechas reales y progreso desde el historial
+  // Actualizar las fechas reales y progreso desde el historial
   async function guardarCambiosProyecto(proyectoId) {
     const { error } = await supabase
       .from("proyectos")
@@ -129,7 +128,6 @@ export default function AdminProyectos() {
     } else {
       setMsg("✅ Proyecto actualizado correctamente.");
       loadData();
-      // Opcional: limpiar mensaje tras unos segundos
       setTimeout(() => setMsg(""), 3000);
     }
   }
@@ -266,7 +264,6 @@ export default function AdminProyectos() {
 
   useEffect(() => { loadData(); }, []);
 
-  // FILTRADO DINÁMICO DE HISTORIAL POR CLIENTE
   const proyectosFiltrados = proyectos.filter(p => {
     if (!filtroCliente) return true;
     return p.cliente_id === filtroCliente;
@@ -337,7 +334,6 @@ export default function AdminProyectos() {
           <h2 className="text-xl font-semibold mb-4" style={{ color: alloy.blue2 }}>Crear nuevo proyecto</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             
-            {/* Columna Izquierda: Datos del proyecto */}
             <div className="space-y-4">
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-bold text-gray-500 uppercase">Nombre del proyecto (*)</label>
@@ -384,13 +380,10 @@ export default function AdminProyectos() {
               </div>
             </div>
 
-            {/* Columna Derecha: Sección de Tiempos Explicativa e Intuitiva */}
             <div className="space-y-4 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
-              
-              {/* Bloque Planificado */}
               <div className="bg-white p-3 rounded-xl border-l-4 border-blue-500 shadow-sm space-y-2">
-                <span className="text-xs font-black text-blue-600 uppercase tracking-wide block">📅 1. Cronograma Estimado (Plan)</span>
-                <p className="text-[11px] text-gray-400">¿Cuándo se supone que debería pasar según el contrato o propuesta?</p>
+                <span className="text-xs font-black text-blue-600 uppercase tracking-wide block">1. Cronograma Estimado (Plan)</span>
+                <p className="text-[11px] text-gray-400">¿Cuándo debería pasar según el contrato?</p>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[10px] text-gray-400 font-bold block uppercase">Inicio Estimado (*)</label>
@@ -403,10 +396,9 @@ export default function AdminProyectos() {
                 </div>
               </div>
 
-              {/* Bloque Real */}
               <div className="bg-white p-3 rounded-xl border-l-4 border-orange-500 shadow-sm space-y-2">
-                <span className="text-xs font-black text-orange-600 uppercase tracking-wide block">🚀 2. Ejecución Real (Día a Día)</span>
-                <p className="text-[11px] text-gray-400">¿Cuándo empezó de verdad? (Se puede rellenar o actualizar después)</p>
+                <span className="text-xs font-black text-orange-600 uppercase tracking-wide block">2. Execution Real (Día a Día)</span>
+                <p className="text-[11px] text-gray-400">¿Cuándo empezó realmente?</p>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[10px] text-gray-400 font-bold block uppercase">Inicio Real</label>
@@ -429,10 +421,8 @@ export default function AdminProyectos() {
           <button onClick={crearProyecto} className="mt-6 w-full py-3 text-white rounded-lg font-bold shadow-md hover:opacity-90 transition" style={{ backgroundColor: alloy.blue2 }}>Crear Proyecto Completo</button>
         </div>
 
-        {/* HISTORIAL ROBUSTO CON ACORDEÓN */}
+        {/* HISTORIAL CON ACORDEÓN */}
         <div className="bg-white p-6 rounded-xl shadow space-y-6">
-          
-          {/* NUEVO: BARRA DE FILTRO POR CLIENTES EN EL HISTORIAL */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-4 border-b">
             <h2 className="text-xl font-semibold">Historial y Jerarquía del Proyecto</h2>
             <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -472,28 +462,27 @@ export default function AdminProyectos() {
                       </div>
 
                       <div className="flex items-center gap-4">
-                          <div className="flex -space-x-3">
-                            {p.proyecto_encargados?.map((e, i) => (
-                              <div key={i} title={e.perfiles?.nombre} className="w-8 h-8 rounded-full bg-slate-800 border-2 border-white flex items-center justify-center text-[10px] text-white font-bold uppercase">
-                                {e.perfiles?.nombre?.substring(0,1)}
-                              </div>
-                            ))}
-                          </div>
-                          <div className={`p-2 rounded-full ${esExpandido ? 'bg-slate-900 text-white rotate-180' : 'bg-slate-100'} transition-transform`}>
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          </div>
+                        <div className="flex -space-x-3">
+                          {p.proyecto_encargados?.map((e, i) => (
+                            <div key={i} title={e.perfiles?.nombre} className="w-8 h-8 rounded-full bg-slate-800 border-2 border-white flex items-center justify-center text-[10px] text-white font-bold uppercase">
+                              {e.perfiles?.nombre?.substring(0,1)}
+                            </div>
+                          ))}
+                        </div>
+                        <div className={`p-2 rounded-full ${esExpandido ? 'bg-slate-900 text-white rotate-180' : 'bg-slate-100'} transition-transform`}>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        </div>
                       </div>
                     </div>
 
-                    {/* CONTENIDO EXPANDIDO (Aquí es donde se edita el día a día real) */}
+                    {/* CONTENIDO EXPANDIDO (Seguimiento real en vivo) */}
                     {esExpandido && (
                       <div className="bg-slate-50 p-6 border-t-2 border-slate-100 space-y-6">
                         
-                        {/* SECCIÓN ACTUALIZAR EJECUCIÓN (Inputs editables sobre la marcha) */}
                         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                           <div className="flex justify-between items-center border-b pb-2">
-                            <span className="text-xs font-black text-slate-700 uppercase tracking-wide block">🔄 Control de Seguimiento en Tiempo Real</span>
-                            <span className="text-[10px] text-slate-400 italic">Actualiza el progreso de este proyecto abajo</span>
+                            <span className="text-xs font-black text-slate-700 uppercase tracking-wide block">Control de Seguimiento en Tiempo Real</span>
+                            <span className="text-[10px] text-slate-400 italic">Actualiza el progreso real del proyecto</span>
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
@@ -559,19 +548,17 @@ export default function AdminProyectos() {
                           </div>
                         </div>
 
-                        {/* DASHBOARD ANALÍTICO COMPLEMENTARIO (Lectura de Planificados originales) */}
                         <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 flex justify-between items-center text-xs">
                           <div>
-                            <span className="text-blue-600 font-black uppercase block tracking-wide">📅 Planificación de Línea Base Original</span>
+                            <span className="text-blue-600 font-black uppercase block tracking-wide">Planificación de Línea Base Original</span>
                             <span className="text-slate-500 font-medium">Lanzamiento estimado: <strong className="text-slate-800">{p.fecha_inicio_planificada || "No definida"}</strong></span>
                             <span className="mx-2 text-slate-300">|</span>
                             <span className="text-slate-500 font-medium">Término estimado: <strong className="text-slate-800">{p.fecha_fin_planificada || "No definida"}</strong></span>
                           </div>
                         </div>
 
-                        {/* SUBSECCIÓN JERÁRQUICA: ENTREGABLES, PM Y RECURSOS */}
+                        {/* SUBSECCIÓN JERÁRQUICA */}
                         <div className="grid md:grid-cols-3 gap-6">
-                          {/* COLUMNA ENTREGABLES */}
                           <div className="space-y-2">
                             <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Entregables / Hitos</h4>
                             {entregablesProy.length === 0 ? (
@@ -590,7 +577,6 @@ export default function AdminProyectos() {
                             )}
                           </div>
 
-                          {/* COLUMNA GESTIÓN ENCARGADOS */}
                           <div className="space-y-2">
                             <h4 className="text-[10px] font-black text-[#37788a] uppercase tracking-widest mb-4">PM Encargado</h4>
                             {displayIds.map((uid, idx) => (
@@ -610,7 +596,6 @@ export default function AdminProyectos() {
                             ))}
                           </div>
 
-                          {/* COLUMNA GESTIÓN RECURSOS */}
                           <div className="space-y-2 border-l pl-6 border-slate-200">
                             <h4 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">Personal Asignado (Recursos)</h4>
                             <div className="space-y-2">
@@ -639,6 +624,7 @@ export default function AdminProyectos() {
                             </select>
                           </div>
                         </div>
+
                       </div>
                     )}
                   </div>
@@ -647,6 +633,7 @@ export default function AdminProyectos() {
             )}
           </div>
         </div>
+
       </div>
     </div>
   );

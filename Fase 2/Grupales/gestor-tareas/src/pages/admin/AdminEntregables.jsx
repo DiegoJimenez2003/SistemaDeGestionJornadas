@@ -46,7 +46,7 @@ export default function AdminEntregables() {
 
     setProyectos(p || []);
     setEntregables(entregablesConHoras);
-    setLoading(false);
+    setLoading(false); 
   }
 
   async function actualizarProgreso(id, valor) {
@@ -79,11 +79,20 @@ export default function AdminEntregables() {
       return;
     }
 
+    // 🔍 ENCONTRAR EL PROYECTO REAL PARA OBTENER SU ID
+    const proyectoEncontrado = proyectos.find(p => p.nombre === proyectoSel);
+    
+    if (!proyectoEncontrado) {
+      setMsg("❌ Error: El proyecto seleccionado no es válido.");
+      return;
+    }
+
     const { error } = await supabase.from("entregables").insert([
       {
         nombre: nuevoNombre,
         codigo: nuevoCodigo, // NUEVO CAMPO
-        proyecto_nombre: proyectoSel,
+        proyecto_id: proyectoEncontrado.id, // 👈 ENVIAMOS EL ID EXIGIDO POR LA BD V2
+        proyecto_nombre: proyectoSel,       // 👈 MANTENEMOS EL TEXTO POR COMPATIBILIDAD CON TU FRONTEND
         tipo: tipo,
         horas_presupuestadas: Number(horasPresupuestadas) || 0,
         progreso_manual: 0 
