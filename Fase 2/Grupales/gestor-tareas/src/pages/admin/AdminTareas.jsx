@@ -122,14 +122,15 @@ export default function AdminTareas() {
 
     try {
       if (estado === "aprobada") {
-        await supabase.from("proyectos").upsert({ nombre: propuesta.proyecto }, { onConflict: 'nombre' });
-        const { data: entregableData, error: errEnt } = await supabase.from("entregables").upsert({ proyecto_nombre: propuesta.proyecto, nombre: propuesta.entregable, tipo: "entregable" }, { onConflict: 'proyecto_nombre, nombre' }).select();
+        const { data: projData } = await supabase.from("proyectos").upsert({ nombre: propuesta.proyecto }, { onConflict: 'nombre' }).select().single();
+        const { data: entregableData, error: errEnt } = await supabase.from("entregables").upsert({ proyecto_id: projData?.id, proyecto_nombre: propuesta.proyecto, nombre: propuesta.entregable, tipo: "entregable" }, { onConflict: 'proyecto_nombre, nombre' }).select();
         if (errEnt || !entregableData || entregableData.length === 0) throw new Error(`No se pudo crear el entregable.`);
         
         const entregableConfirmado = entregableData[0];
         const { data: codigoData, error: errCod } = await supabase.from("codigos_tarea").insert([{
           codigo: propuesta.codigo_propuesto || "M-NUEVO",
           descripcion: propuesta.descripcion_propuesta,
+          proyecto_id: projData?.id,
           proyecto: propuesta.proyecto,
           entregable: entregableConfirmado.nombre
         }]).select().single();
@@ -139,6 +140,7 @@ export default function AdminTareas() {
           usuario_id: propuesta.usuario_id,
           nombre_trabajador: propuesta.nombre_trabajador,
           fecha: propuesta.fecha,
+          proyecto_id: projData?.id,
           proyecto: propuesta.proyecto,
           entregable: entregableConfirmado.nombre,
           codigo_id: codigoData.id,
@@ -175,9 +177,12 @@ export default function AdminTareas() {
         if (ent && ent.progreso_manual >= 100) return setMsg("❌ Error: Este entregable ya está cerrado.");
     }
 
+    const proyectoReal = proyectos.find(p => p.nombre === newProyecto);
+
     const { error } = await supabase.from("codigos_tarea").insert([{ 
       codigo: newCodigoNombre, 
       descripcion: newTareaDesc, 
+      proyecto_id: proyectoReal?.id || null,
       proyecto: newProyecto, 
       entregable: newEntregable || "General"
     }]);
@@ -187,6 +192,8 @@ export default function AdminTareas() {
       setNewCodigoNombre("");
       setNewTareaDesc("");
       loadData(); 
+    } else {
+      setMsg(`❌ Error al crear código: ${error.message}`);
     }
   }
 
@@ -220,6 +227,7 @@ export default function AdminTareas() {
       }
 
       const usuarioSeleccionado = usuarios.find(u => u.id === selectedUser);
+      const proyectoReal = proyectos.find(p => p.nombre === codigoSeleccionado.proyecto);
 
       const { error: errAsig } = await supabase.from("tareas_asignadas").insert([{ 
         usuario_id: selectedUser, 
@@ -231,6 +239,7 @@ export default function AdminTareas() {
         usuario_id: selectedUser,
         nombre_trabajador: usuarioSeleccionado?.nombre || "Usuario",
         codigo_id: codigoSeleccionado.id,
+        proyecto_id: proyectoReal?.id || codigoSeleccionado.proyecto_id || null,
         proyecto: codigoSeleccionado.proyecto,
         entregable: codigoSeleccionado.entregable,
         horas: 0,
