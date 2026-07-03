@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 export default function SuperTaskManager() {
-  const [tasks, setTasks] = useState([]); // Backlog
-  const [dailyPlan, setDailyPlan] = useState([]); // Plan del día
+  const [tasks, setTasks] = useState([]); // Backlog real desde tareas_asignadas + codigos_tarea
+  const [dailyPlan, setDailyPlan] = useState([]); // Jornada del día (planificacion_diaria)
   const [isSent, setIsSent] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Control de Evidencias
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   
@@ -14,143 +15,176 @@ export default function SuperTaskManager() {
   const [showReportingModal, setShowReportingModal] = useState(null);
   const [showEventModal, setShowEventModal] = useState(false);
 
-  // Estados para Reporte de Tarea
+  // Formulario Reporte
   const [progreso, setProgreso] = useState(0);
   const [horas, setHoras] = useState(2);
   const [comentario, setComentario] = useState("");
 
-  // Estado para Eventos
-  const [evento, setEvento] = useState({ tipo: "Incidencia", desc: "", hh: 1 });
+  // Eventos/Imprevistos
+  const [evento, setEvento] = useState({ tipo: "Incidencia Técnica", desc: "", hh: 1 });
 
-const getToday = () => {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Santiago",
-  }).format(new Date());
-};
+  const getToday = () => {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Santiago",
+    }).format(new Date());
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
 
   async function fetchData() {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      console.warn("⚠️ DEBUG: No se encontró ningún usuario logueado en Supabase.");
-      return setLoading(false);
-    }
+    try {
+      // 1. Obtener el usuario logueado
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.error("❌ NO HAY USUARIO LOGUEADO");
+        alert("Tu sesión expiró o no estás logueado.");
+        return setLoading(false);
+      }
+      
+      const hoy = getToday();
 
-    const hoy = getToday();
+      // 2. Obtener los códigos asignados al usuario en `tareas_asignadas`
+      const { data: asignaciones, error: errorAsignadas } = await supabase
+        .from("tareas_asignadas")
+        .select("*")
+        .eq("usuario_id", user.id);
 
-    // 1. Cargar Planificación del día
-    const { data: planHoy, error: errorPlanHoy } = await supabase
-      .from("planificacion_diaria")
-      .select(`
-        id,
-        estado_plan,
-        progreso_reportado,
-        tarea_id,
-        comentario_admin,
-        tareas (
-          id, entregable, proyecto, estado, revision, horas,
-          importancia, urgencia, dificultad,
-          codigos_tarea (codigo)
-        )
-      `)
-      .eq("usuario_id", user.id)
-      .eq("fecha", hoy);
+      if (errorAsignadas) console.error("❌ Error en tareas_asignadas:", errorAsignadas);
 
-    if (errorPlanHoy) {
-      console.error("❌ DEBUG ERROR [planificacion_diaria]:", errorPlanHoy);
-    }
+      // 3. Obtener todos los códigos de tarea para resolver los nombres, descripciones y proyectos
+      const { data: todosLosCodigos } = await supabase.from("codigos_tarea").select("*");
 
-    const jornadasActivas =
-  (planHoy || []).filter(
-    p =>
-      p.estado_plan !== "rechazado" &&
-      p.estado_plan !== "finalizado"
-  );
+      // 4. Obtener los metadatos de las tareas (importancia, urgencia, dificultad, etc.) desde la tabla `tareas`
+      const { data: tareasMetadatos } = await supabase
+        .from("tareas")
+        .select("*")
+        .eq("usuario_id", user.id);
 
-if (jornadasActivas.length > 0) {
-  const formatted = jornadasActivas.map(p => ({
-    ...p.tareas,
-    plan_id: p.id,
-    estado_plan: p.estado_plan,
-    progreso_actual: p.progreso_reportado,
-    comentario_admin: p.comentario_admin,
-  }));
+      const safeAsignaciones = asignaciones || [];
+      const safeCodigos = todosLosCodigos || [];
+      const safeMetadatos = tareasMetadatos || [];
 
-  setDailyPlan(formatted);
-  setIsSent(true);
-} else {
-  setDailyPlan([]);
-  setIsSent(false);
-}
-
-    // 2. Cargar Backlog de Tareas Asignadas (Filtro Corregido)
-    const { data: backlog, error: errorBacklog } = await supabase
-      .from("tareas")
-      .select(`
-        *, 
-        codigos_tarea (
-          id, codigo, descripcion,
-          tareas ( estado, revision )
-        )
-      `)
-      .eq("usuario_id", user.id)
-      .order("id", { ascending: false });
-
-    console.log("--- 🕵️‍♂️ INICIO DE CONTROL DEBUG DE TAREAS ---");
-    console.log("1. ID del usuario logueado actual:", user.id);
-    console.log("2. ¿Hubo error de Supabase al traer tareas?:", errorBacklog || "Ninguno. Todo OK con el servidor.");
-    console.log("3. Tareas 'crudas' devueltas por la Base de Datos:", backlog);
-
-    if (backlog) {
-      // CORRECCIÓN: La tarea solo se oculta si ya se completó Y fue aprobada por el admin.
-      // De lo contrario, permanecerá visible en tu Backlog para que puedas seguir sumando horas.
-      const finalTasks = backlog.filter(tarea => {
-        const terminadaYArchivada = tarea.estado === "Completada" && tarea.revision === "aprobada";
-        return !terminadaYArchivada; 
+      // 5. Construir el Backlog Cruzando tablas según el Esquema SQL
+      const backlogFormateado = safeAsignaciones.map(asig => {
+        const codigoRelacionado = safeCodigos.find(c => Number(c.id) === Number(asig.codigo_id));
+        // Buscamos si existe ya un registro en tareas para extraer prioridades/vencimientos
+        const metaRelacionado = safeMetadatos.find(t => Number(t.codigo_id) === Number(asig.codigo_id));
+        
+        return {
+          id: metaRelacionado?.id || asig.id, // Si existe en la tabla tareas usamos su ID para planificacion_diaria (FK)
+          codigo_id: asig.codigo_id,
+          codigo: codigoRelacionado?.codigo || "S/C", 
+          descripcion: codigoRelacionado?.descripcion || "Sin descripción",
+          proyecto: codigoRelacionado?.proyecto || "Proyecto Desconocido",
+          proyecto_id: codigoRelacionado?.proyecto_id,
+          entregable: codigoRelacionado?.entregable || "General",
+          importancia: metaRelacionado?.importancia || "Media",
+          urgencia: metaRelacionado?.urgencia || "Baja",
+          dificultad: metaRelacionado?.dificultad || "Media",
+          prioritaria: metaRelacionado?.prioritaria || false,
+          horas: metaRelacionado?.horas || 0,
+          fecha_vencimiento: metaRelacionado?.fecha_vencimiento || "Sin Fecha"
+        };
       });
-      
-      console.log("4. Tareas finales tras filtros de React (lo que debería pintarse):", finalTasks);
-      console.log("--- 🕵️‍♂️ FIN DE CONTROL DEBUG TAREAS ---");
-      
-      setTasks(finalTasks);
-    } else {
-      console.log("4. Tareas finales: El backlog vino nulo.");
-      console.log("--- 🕵️‍♂️ FIN DE CONTROL DEBUG TAREAS ---");
-    }
 
-    setLoading(false);
+      setTasks(backlogFormateado);
+
+      // 6. Planificación del día
+      const { data: planData } = await supabase
+        .from("planificacion_diaria")
+        .select("*")
+        .eq("usuario_id", user.id)
+        .eq("fecha", hoy);
+
+      const safePlan = planData || [];
+      if (safePlan.length > 0) {
+        const mappedPlan = safePlan.map(registro => {
+          // El campo registro.tarea_id apunta al id de la tabla `tareas`
+          const tareaAsociada = backlogFormateado.find(t => String(t.id) === String(registro.tarea_id)) || {};
+          return {
+            ...tareaAsociada,
+            plan_id: registro.id, 
+            tarea_id: registro.tarea_id, 
+            estado_plan: registro.estado_plan, 
+            progreso_actual: registro.progreso_reportado,
+            comentario_admin: registro.comentario_admin
+          };
+        });
+        setDailyPlan(mappedPlan);
+        setIsSent(true);
+      } else {
+        setDailyPlan([]);
+        setIsSent(false);
+      }
+
+    } catch (err) {
+      console.error("💥 Error en el proceso:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const toggleTaskInPlan = (task) => {
     if (isSent) return;
     setDailyPlan((prev) => {
-      const exists = prev.find((t) => t.id === task.id);
-      return exists ? prev.filter((t) => t.id !== task.id) : [...prev, task];
+      const exists = prev.find((t) => String(t.codigo_id) === String(task.codigo_id));
+      return exists ? prev.filter((t) => String(t.codigo_id) !== String(task.codigo_id)) : [...prev, task];
     });
   };
 
   const handleSendProposal = async () => {
-    if (dailyPlan.length === 0) return alert("Selecciona tareas primero.");
-    const { data: { user } } = await supabase.auth.getUser();
+    if (dailyPlan.length === 0) return alert("Selecciona tareas del Backlog primero.");
+    
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      // Asegurarnos de que las tareas existan en la tabla `tareas` antes de vincularlas en planificacion_diaria
+      const registrosPlan = [];
 
-    const registros = dailyPlan.map(t => ({
-      usuario_id: user.id,
-      tarea_id: t.id,
-      estado_plan: "propuesto", 
-      fecha: getToday(),
-      progreso_reportado: 0
-    }));
+      for (const t of dailyPlan) {
+        let tareaRealId = t.id;
 
-    const { error } = await supabase.from("planificacion_diaria").insert(registros);
+        // Si la tarea no venía de la tabla `tareas` originalmente (id provisional de asignación), creamos el registro base en `tareas`
+        if (!t.fecha_vencimiento || t.id === t.codigo_id) {
+          const { data: nuevaTarea, error: errorInsertTarea } = await supabase
+            .from("tareas")
+            .insert([{
+              usuario_id: user.id,
+              codigo_id: t.codigo_id,
+              proyecto_id: t.proyecto_id,
+              proyecto: t.proyecto,
+              entregable: t.entregable,
+              estado: "En Progreso",
+              fecha: getToday(),
+              revision: "pendiente"
+            }])
+            .select()
+            .single();
 
-    if (!error) {
-      alert("Plan enviado. Pendiente de aprobación por el Administrador.");
-      fetchData();
-    } else {
-      alert("Error: " + error.message);
+          if (errorInsertTarea) throw errorInsertTarea;
+          tareaRealId = nuevaTarea.id;
+        }
+
+        registrosPlan.push({
+          usuario_id: user.id,
+          tarea_id: tareaRealId, 
+          estado_plan: "propuesto", 
+          fecha: getToday(),
+          progreso_reportado: 0,
+          horas_reales: 0
+        });
+      }
+
+      const { error } = await supabase.from("planificacion_diaria").insert(registrosPlan);
+      if (error) throw error;
+
+      alert("Jornada enviada al Administrador. Estado: Esperando Aprobación.");
+      await fetchData();
+    } catch (err) {
+      alert("Error al enviar jornada: " + err.message);
     }
   };
 
@@ -160,69 +194,49 @@ if (jornadasActivas.length > 0) {
       let fileUrl = null;
 
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("No hay sesión activa");
-
-      const userIdentifier = user.email 
-        ? user.email.split('@')[0].replace(/[.]/g, '_') 
-        : user.id;
-
-      const userFolder = userIdentifier; 
+      if (!user) throw new Error("Sin sesión activa");
 
       if (file) {
-        const timestamp = Date.now();
-        const fileName = `${timestamp}_${file.name.replace(/\s/g, '_')}`;
-        const filePath = `${userFolder}/${fileName}`;
+        const userIdentifier = user.email ? user.email.split('@')[0].replace(/[.]/g, '_') : user.id;
+        const filePath = `${userIdentifier}/${Date.now()}_${file.name.replace(/\s/g, '_')}`;
 
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from('evidencias_tareas')
-          .upload(filePath, file, {
-            cacheControl: '3600',
-            upsert: false 
-          });
+          .upload(filePath, file);
 
         if (uploadError) throw uploadError;
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('evidencias_tareas')
-          .getPublicUrl(filePath);
-        
+        const { data: { publicUrl } } = supabase.storage.from('evidencias_tareas').getPublicUrl(filePath);
         fileUrl = publicUrl;
-
-        const blobUrl = URL.createObjectURL(file);
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.setAttribute('download', file.name);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(blobUrl);
       }
 
-      let nuevoEstado = parseInt(progreso) >= 100 ? "Completada" : "En Progreso";
-      const horasNum = parseFloat(horas);
-      const horasPrevias = parseFloat(showReportingModal.horas || 0);
+      const estadoTarea = parseInt(progreso) >= 100 ? "Completada" : "En Progreso";
 
+      // 1. Actualizar planificacion_diaria
       const { error: errorPlan } = await supabase
         .from("planificacion_diaria")
         .update({
-          horas_reales: horasNum,
+          horas_reales: parseFloat(horas),
           progreso_reportado: progreso,
           comentarios_cierre: comentario,
-          evidencia_url: fileUrl, 
+          evidencia_url: fileUrl,
           estado_plan: "finalizado"
         })
         .eq("id", showReportingModal.plan_id);
 
       if (errorPlan) throw errorPlan;
 
+      // 2. Actualizar la ejecución real en la tabla `tareas` usando la FK correcta
       const { error: errorTarea } = await supabase
         .from("tareas")
         .update({
-          estado: nuevoEstado,
-          horas: horasPrevias + horasNum,
-          evidencia_url: fileUrl 
+          estado: estadoTarea,
+          horas: parseFloat(horas),
+          evidencia_url: fileUrl,
+          entregable: showReportingModal.entregable,
+          descripcion: comentario
         })
-        .eq("id", showReportingModal.id);
+        .eq("id", showReportingModal.tarea_id);
 
       if (errorTarea) throw errorTarea;
 
@@ -230,12 +244,12 @@ if (jornadasActivas.length > 0) {
       setProgreso(0);
       setComentario("");
       setFile(null);
-      fetchData();
-      alert(`Reporte guardado. Archivo organizado en la carpeta de: ${userFolder}`);
+      await fetchData();
+      alert("¡Reporte guardado con éxito!");
 
     } catch (err) {
-      console.error("Error:", err);
-      alert("Error al reportar: " + err.message);
+      console.error("❌ Error al reportar:", err);
+      alert("Error al guardar horas: " + err.message);
     } finally {
       setUploading(false);
     }
@@ -244,36 +258,27 @@ if (jornadasActivas.length > 0) {
   const saveEvent = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Usuario no autenticado");
+      if (!evento.desc.trim()) return alert("Describe el suceso.");
 
-      if (!evento.desc.trim()) {
-        alert("Por favor, describe el suceso.");
-        return;
-      }
-
-      const { error } = await supabase.from("eventos_jornada").insert([
-        {
-          usuario_id: user.id,
-          tipo: evento.tipo,
-          descripcion: evento.desc,
-          horas_afectadas: parseFloat(evento.hh), 
-          fecha: getToday(),
-        },
-      ]);
+      const { error } = await supabase.from("eventos_jornada").insert([{
+        usuario_id: user.id,
+        tipo: evento.tipo,
+        descripcion: evento.desc,
+        horas_afectadas: parseFloat(evento.hh),
+        fecha: getToday()
+      }]);
 
       if (error) throw error;
-
-      alert("Evento registrado con éxito");
+      alert("Evento registrado");
       setShowEventModal(false);
-      setEvento({ tipo: "Incidencia Técnica", desc: "", hh: 1 }); 
-      
+      setEvento({ tipo: "Incidencia Técnica", desc: "", hh: 1 });
+      await fetchData();
     } catch (err) {
-      console.error("Error al guardar evento:", err);
-      alert("No se pudo registrar: " + (err.message || "Error desconocido"));
+      alert("Error: " + err.message);
     }
   };
 
-  if (loading) return <div className="p-20 text-center font-bold text-cyan-700 animate-pulse">CARGANDO...</div>;
+  if (loading) return <div className="p-20 text-center font-bold text-cyan-700 animate-pulse">CARGANDO MÓDULOS...</div>;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
@@ -284,43 +289,38 @@ if (jornadasActivas.length > 0) {
           <header className="flex justify-between items-center">
             <div>
               <h1 className="text-4xl font-black text-slate-900 uppercase italic tracking-tighter">Backlog</h1>
-              <p className="text-[#37788a] text-[10px] font-black uppercase tracking-[0.3em]">Total Tareas Pendientes</p>
+              <p className="text-[#37788a] text-[10px] font-black uppercase tracking-[0.3em]">Mis Códigos Asignados</p>
             </div>
             {isSent && <span className="bg-slate-900 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase italic animate-pulse">Jornada enviada</span>}
           </header>
 
           <div className="grid gap-3">
             {tasks.map(task => {
-              const inPlan = dailyPlan.find(d => d.id === task.id);
+              const inPlan = dailyPlan.find(d => String(d.codigo_id) === String(task.codigo_id));
               return (
-                <div key={task.id} className={`bg-white p-6 rounded-[2.5rem] border-2 transition-all ${inPlan ? 'border-[#37788a] shadow-xl' : 'border-transparent shadow-sm'}`}>
+                <div key={task.codigo_id} className={`bg-white p-6 rounded-[2.5rem] border-2 transition-all ${inPlan ? 'border-[#37788a] shadow-xl' : 'border-transparent shadow-sm'}`}>
                   <div className="flex justify-between items-start">
                     <div className="space-y-3 flex-1">
                       <div className="flex flex-wrap gap-2">
                         <span className="bg-slate-900 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-tighter">
-                          {task.codigos_tarea?.codigo || 'S/C'}
+                          {task.codigo || 'S/C'}
                         </span>
                         <span className={`text-[8px] font-black px-2 py-1 rounded-md uppercase ${task.prioritaria ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                           {task.prioritaria ? 'Prioritaria' : 'En Backlog'}
                         </span>
                       </div>
-                      <h3 className="font-black text-slate-800 text-lg leading-tight uppercase">{task.entregable}</h3>
+                      
+                      <h3 className="font-black text-slate-800 text-lg leading-tight uppercase">{task.descripcion || "Sin Descripción"}</h3>
                       
                       <div className="flex gap-2">
-                        <span className="text-[9px] font-black px-3 py-1 bg-slate-100 rounded-lg uppercase text-slate-600">Imp: {task.importancia || 0}</span>
-                        <span className="text-[9px] font-black px-3 py-1 bg-slate-100 rounded-lg uppercase text-slate-600">Urg: {task.urgencia || 0}</span>
-                        <span className="text-[9px] font-black px-3 py-1 bg-slate-100 rounded-lg uppercase text-slate-600">Dif: {task.dificultad || 0}</span>
-                      </div>
-
-                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                        <p className="text-xs text-slate-600 font-medium leading-relaxed italic">
-                          {task.codigos_tarea?.descripcion || task.descripcion || "Sin descripción adicional registrada."}
-                        </p>
+                        <span className="text-[9px] font-black px-3 py-1 bg-slate-100 rounded-lg uppercase text-slate-600">Imp: {task.importancia}</span>
+                        <span className="text-[9px] font-black px-3 py-1 bg-slate-100 rounded-lg uppercase text-slate-600">Urg: {task.urgencia}</span>
+                        <span className="text-[9px] font-black px-3 py-1 bg-slate-100 rounded-lg uppercase text-slate-600">Dif: {task.dificultad}</span>
                       </div>
 
                       <div className="flex items-center gap-4">
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{task.proyecto}</p>
-                        <span className="text-[9px] font-black text-[#37788a] uppercase">Acumulado: {task.horas || 0} HH</span>
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{task.proyecto || "General"}</p>
+                        <span className="text-[9px] font-black text-[#37788a] uppercase">Base: {task.horas || 0} HH</span>
                       </div>
                     </div>
                     <button 
@@ -351,21 +351,24 @@ if (jornadasActivas.length > 0) {
 
             <div className="space-y-4 min-h-[300px]">
               {dailyPlan.map(item => (
-                <div key={item.id} className="bg-white/10 backdrop-blur-2xl p-6 rounded-[2.5rem] border border-white/10 group transition-all">
+                <div key={item.plan_id || item.codigo_id} className="bg-white/10 backdrop-blur-2xl p-6 rounded-[2.5rem] border border-white/10 group transition-all">
                   <div className="flex justify-between items-center">
                     <div className="max-w-[65%]">
                         <span className="text-[8px] font-black text-white/40 uppercase block mb-1">
-                          {item.codigos_tarea?.codigo}
+                          {item.codigo || 'S/C'}
                         </span>
-                        <p className="font-black text-sm uppercase leading-tight">{item.entregable}</p>
+                        <p className="font-black text-sm uppercase leading-tight">{item.descripcion || "Tarea de Planificación"}</p>
                     </div>
                     
                     {item.estado_plan === 'aprobado' ? (
-                      <button onClick={() => setShowReportingModal(item)} className="bg-white text-[#37788a] px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-orange-400 hover:text-white transition-all">Reportar</button>
+                      <button onClick={() => {
+                        setProgreso(item.progreso_actual || 0);
+                        setShowReportingModal(item);
+                      }} className="bg-white text-[#37788a] px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-orange-400 hover:text-white transition-all">Reportar</button>
                     ) : item.estado_plan === 'finalizado' ? (
                       <div className="p-3 bg-white/20 rounded-2xl text-white font-black text-[9px] uppercase italic tracking-widest">Listo</div>
                     ) : item.estado_plan === 'rechazado' ? (
-                      <span className="text-[8px] font-black uppercase text-red-400 italic">Rechazado por Jefe</span>
+                      <span className="text-[8px] font-black uppercase text-red-400 italic">Rechazado</span>
                     ) : (
                       <span className="text-[8px] font-black uppercase text-orange-200 animate-pulse italic">En Revisión</span>
                     )}
@@ -384,7 +387,7 @@ if (jornadasActivas.length > 0) {
               <div className="mt-8 bg-slate-900/40 border border-white/10 p-6 rounded-[2.5rem] backdrop-blur-md">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
-                  <p className="text-[9px] font-black text-amber-400 uppercase tracking-[0.2em]">Instrucciones del Administrador</p>
+                  <p className="text-[9px] font-black text-amber-400 uppercase tracking-[0.2em]">Instrucciones del Admin</p>
                 </div>
                 <p className="text-xs text-white/90 font-medium leading-relaxed italic ml-5">
                   "{dailyPlan.find(t => t.comentario_admin)?.comentario_admin}"
@@ -412,16 +415,11 @@ if (jornadasActivas.length > 0) {
               <header className="mb-8 text-center">
                 <div className="flex flex-col items-center gap-2">
                   <span className="bg-slate-900 text-white px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
-                    {showReportingModal.codigos_tarea?.codigo}
+                    {showReportingModal.codigo}
                   </span>
                   <h3 className="font-black uppercase tracking-tighter text-3xl text-slate-800 mt-2 leading-none">
-                    {showReportingModal.entregable}
+                    {showReportingModal.descripcion}
                   </h3>
-                  <div className="flex gap-2 mt-2">
-                    <span className="text-[8px] font-black uppercase bg-slate-100 px-2 py-1 rounded text-slate-500">Imp: {showReportingModal.importancia}</span>
-                    <span className="text-[8px] font-black uppercase bg-slate-100 px-2 py-1 rounded text-slate-500">Urg: {showReportingModal.urgencia}</span>
-                    <span className="text-[8px] font-black uppercase bg-slate-100 px-2 py-1 rounded text-slate-500">Dif: {showReportingModal.dificultad}</span>
-                  </div>
                 </div>
               </header>
               
@@ -437,7 +435,7 @@ if (jornadasActivas.length > 0) {
                 <div className="grid grid-cols-2 gap-6">
                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
                     <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Horas Hoy</label>
-                    <input type="number" className="w-full bg-transparent font-black text-3xl outline-none text-slate-800" value={horas} onChange={(e) => setHoras(e.target.value)} />
+                    <input type="number" step="0.5" className="w-full bg-transparent font-black text-3xl outline-none text-slate-800" value={horas} onChange={(e) => setHoras(e.target.value)} />
                    </div>
                    <div className="bg-slate-900 p-6 rounded-3xl flex flex-col justify-center items-center">
                     <label className="text-[10px] font-black uppercase text-slate-400 mb-2">Siguiente Estado</label>
@@ -460,9 +458,6 @@ if (jornadasActivas.length > 0) {
                   {file && (
                     <div className="mt-2 flex items-center gap-2">
                       <span className="text-[10px] text-cyan-700 font-bold italic">✓ {file.name}</span>
-                      <span className="text-[8px] bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded-full uppercase font-black">
-                        {(file.size / 1024 / 1024).toFixed(2)} MB
-                      </span>
                     </div>
                   )}
                 </div>
@@ -495,18 +490,18 @@ if (jornadasActivas.length > 0) {
           <div className="bg-white rounded-[4rem] p-12 max-w-sm w-full space-y-8 shadow-2xl border-t-[10px] border-orange-400">
             <h3 className="text-3xl font-black uppercase text-slate-800 italic tracking-tighter text-center">Imprevisto</h3>
             <div className="space-y-6">
-              <select className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-xs uppercase outline-none focus:ring-2 ring-orange-400/20" onChange={(e) => setEvento({...evento, tipo: e.target.value})}>
-                <option>Incidencia Técnica</option>
-                <option>Ineficiencia</option>
-                <option>Tarea No Programada</option>
-                <option>Permiso Administrativo</option>
-                <option>Falta de Material</option>
-                <option>Clima/Entorno</option>
+              <select className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-xs uppercase outline-none focus:ring-2 ring-orange-400/20" value={evento.tipo} onChange={(e) => setEvento({...evento, tipo: e.target.value})}>
+                <option value="Incidencia Técnica">Incidencia Técnica</option>
+                <option value="Ineficiencia">Ineficiencia</option>
+                <option value="Tarea No Programada">Tarea No Programada</option>
+                <option value="Permiso Administrativo">Permiso Administrativo</option>
+                <option value="Falta de Material">Falta de Material</option>
+                <option value="Clima/Entorno">Clima/Entorno</option>
               </select>
-              <textarea placeholder="Describe el suceso..." className="w-full p-6 bg-slate-50 border border-slate-200 rounded-3xl h-32 text-sm outline-none" onChange={(e) => setEvento({...evento, desc: e.target.value})} />
+              <textarea placeholder="Describe el suceso..." className="w-full p-6 bg-slate-50 border border-slate-200 rounded-3xl h-32 text-sm outline-none" value={evento.desc} onChange={(e) => setEvento({...evento, desc: e.target.value})} />
               <div className="flex items-center gap-4 bg-slate-100 p-5 rounded-3xl">
                 <span className="text-[10px] font-black uppercase text-slate-400">HH</span>
-                <input type="number" className="bg-transparent font-black text-xl w-full text-right outline-none" value={evento.hh} onChange={(e) => setEvento({...evento, hh: e.target.value})} />
+                <input type="number" step="0.5" className="bg-transparent font-black text-xl w-full text-right outline-none" value={evento.hh} onChange={(e) => setEvento({...evento, hh: e.target.value})} />
               </div>
             </div>
             <div className="space-y-4">
