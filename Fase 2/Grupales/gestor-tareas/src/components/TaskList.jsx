@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabaseClient";
+import { supabase } from "../lib/supabaseClient"; 
 
 export default function SuperTaskManager() {
-  const [tasks, setTasks] = useState([]); // Backlog real desde tareas_asignadas + codigos_tarea
-  const [dailyPlan, setDailyPlan] = useState([]); // Jornada del día (planificacion_diaria)
+  const [tasks, setTasks] = useState([]); 
+  const [dailyPlan, setDailyPlan] = useState([]); 
   const [isSent, setIsSent] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -36,17 +36,15 @@ export default function SuperTaskManager() {
   async function fetchData() {
     setLoading(true);
     try {
-      // 1. Obtener el usuario logueado
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         console.error("❌ NO HAY USUARIO LOGUEADO");
-        alert("Tu sesión expiró o no estás logueado.");
         return setLoading(false);
       }
       
       const hoy = getToday();
 
-      // 2. Obtener los códigos asignados al usuario en `tareas_asignadas`
+      // 1. Obtener los códigos asignados
       const { data: asignaciones, error: errorAsignadas } = await supabase
         .from("tareas_asignadas")
         .select("*")
@@ -54,10 +52,9 @@ export default function SuperTaskManager() {
 
       if (errorAsignadas) console.error("❌ Error en tareas_asignadas:", errorAsignadas);
 
-      // 3. Obtener todos los códigos de tarea para resolver los nombres, descripciones y proyectos
       const { data: todosLosCodigos } = await supabase.from("codigos_tarea").select("*");
 
-      // 4. Obtener los metadatos de las tareas (importancia, urgencia, dificultad, etc.) desde la tabla `tareas`
+      // Traemos el historial de ejecución real de las tareas
       const { data: tareasMetadatos } = await supabase
         .from("tareas")
         .select("*")
@@ -67,32 +64,37 @@ export default function SuperTaskManager() {
       const safeCodigos = todosLosCodigos || [];
       const safeMetadatos = tareasMetadatos || [];
 
-      // 5. Construir el Backlog Cruzando tablas según el Esquema SQL
-      const backlogFormateado = safeAsignaciones.map(asig => {
-        const codigoRelacionado = safeCodigos.find(c => Number(c.id) === Number(asig.codigo_id));
-        // Buscamos si existe ya un registro en tareas para extraer prioridades/vencimientos
-        const metaRelacionado = safeMetadatos.find(t => Number(t.codigo_id) === Number(asig.codigo_id));
-        
-        return {
-          id: metaRelacionado?.id || asig.id, // Si existe en la tabla tareas usamos su ID para planificacion_diaria (FK)
-          codigo_id: asig.codigo_id,
-          codigo: codigoRelacionado?.codigo || "S/C", 
-          descripcion: codigoRelacionado?.descripcion || "Sin descripción",
-          proyecto: codigoRelacionado?.proyecto || "Proyecto Desconocido",
-          proyecto_id: codigoRelacionado?.proyecto_id,
-          entregable: codigoRelacionado?.entregable || "General",
-          importancia: metaRelacionado?.importancia || "Media",
-          urgencia: metaRelacionado?.urgencia || "Baja",
-          dificultad: metaRelacionado?.dificultad || "Media",
-          prioritaria: metaRelacionado?.prioritaria || false,
-          horas: metaRelacionado?.horas || 0,
-          fecha_vencimiento: metaRelacionado?.fecha_vencimiento || "Sin Fecha"
-        };
-      });
+      // Generamos el backlog inicial cruzando asignaciones con códigos y metadatos
+      const backlogFiltrado = safeAsignaciones
+        .map(asig => {
+          const codigoRelacionado = safeCodigos.find(c => Number(c.id) === Number(asig.codigo_id));
+          const metaRelacionado = safeMetadatos.find(t => Number(t.codigo_id) === Number(asig.codigo_id));
+          
+          return {
+            id: metaRelacionado?.id || null, 
+            asignacion_id: asig.id,
+            codigo_id: asig.codigo_id,
+            codigo: codigoRelacionado?.codigo || "S/C", 
+            descripcion: codigoRelacionado?.descripcion || "Sin descripción",
+            proyecto: codigoRelacionado?.proyecto || "Proyecto Desconocido",
+            proyecto_id: codigoRelacionado?.proyecto_id,
+            entregable: codigoRelacionado?.entregable || "General",
+            importancia: metaRelacionado?.importancia || "Media",
+            urgencia: metaRelacionado?.urgencia || "Baja",
+            dificultad: metaRelacionado?.dificultad || "Media",
+            prioritaria: metaRelacionado?.prioritaria || false,
+            horas: metaRelacionado?.horas || 0,
+            fecha_vencimiento: metaRelacionado?.fecha_vencimiento || "Sin Fecha",
+            estado_real: metaRelacionado?.estado || "En Progreso", // Estado real en la tabla tareas
+            revision: metaRelacionado?.revision || "pendiente"    // Estado de revisión de la tarea
+          };
+        })
+        // 🔥 FILTRO CRÍTICO: Si la tarea ya está COMPLETADA y APROBADA por el admin, DESAPARECE del Backlog
+        .filter(task => !(task.estado_real === "Completada" && task.revision === "aprobada"));
 
-      setTasks(backlogFormateado);
+      setTasks(backlogFiltrado);
 
-      // 6. Planificación del día
+      // 2. Planificación del día
       const { data: planData } = await supabase
         .from("planificacion_diaria")
         .select("*")
@@ -102,10 +104,17 @@ export default function SuperTaskManager() {
       const safePlan = planData || [];
       if (safePlan.length > 0) {
         const mappedPlan = safePlan.map(registro => {
-          // El campo registro.tarea_id apunta al id de la tabla `tareas`
-          const tareaAsociada = backlogFormateado.find(t => String(t.id) === String(registro.tarea_id)) || {};
+          const metaReal = safeMetadatos.find(m => Number(m.id) === Number(registro.tarea_id));
+          // Buscamos de manera general en todo el pool cruzando por código id
+          const codigoRelacionado = safeCodigos.find(c => Number(c.id) === Number(metaReal?.codigo_id));
+          
           return {
-            ...tareaAsociada,
+            id: registro.tarea_id,
+            codigo_id: metaReal?.codigo_id,
+            codigo: codigoRelacionado?.codigo || "S/C",
+            descripcion: codigoRelacionado?.descripcion || "Tarea de Planificación",
+            proyecto: codigoRelacionado?.proyecto || "General",
+            entregable: metaReal?.entregable || "General",
             plan_id: registro.id, 
             tarea_id: registro.tarea_id, 
             estado_plan: registro.estado_plan, 
@@ -113,6 +122,7 @@ export default function SuperTaskManager() {
             comentario_admin: registro.comentario_admin
           };
         });
+
         setDailyPlan(mappedPlan);
         setIsSent(true);
       } else {
@@ -121,7 +131,7 @@ export default function SuperTaskManager() {
       }
 
     } catch (err) {
-      console.error("💥 Error en el proceso:", err);
+      console.error("Error en el proceso:", err);
     } finally {
       setLoading(false);
     }
@@ -140,28 +150,39 @@ export default function SuperTaskManager() {
     
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return alert("Sesión inválida.");
       
-      // Asegurarnos de que las tareas existan en la tabla `tareas` antes de vincularlas en planificacion_diaria
+      const hoy = getToday();
       const registrosPlan = [];
 
       for (const t of dailyPlan) {
-        let tareaRealId = t.id;
+        let tareaRealId = null;
 
-        // Si la tarea no venía de la tabla `tareas` originalmente (id provisional de asignación), creamos el registro base en `tareas`
-        if (!t.fecha_vencimiento || t.id === t.codigo_id) {
+        const { data: tareaExistente, error: errorCheck } = await supabase
+          .from("tareas")
+          .select("id")
+          .eq("usuario_id", user.id)
+          .eq("codigo_id", t.codigo_id)
+          .maybeSingle();
+
+        if (errorCheck) console.error("Error al verificar tarea:", errorCheck);
+
+        if (tareaExistente) {
+          tareaRealId = tareaExistente.id;
+        } else {
           const { data: nuevaTarea, error: errorInsertTarea } = await supabase
             .from("tareas")
             .insert([{
               usuario_id: user.id,
               codigo_id: t.codigo_id,
-              proyecto_id: t.proyecto_id,
-              proyecto: t.proyecto,
-              entregable: t.entregable,
+              proyecto_id: t.proyecto_id || null,
+              proyecto: t.proyecto || "General",
+              entregable: t.entregable || "General",
               estado: "En Progreso",
-              fecha: getToday(),
+              fecha: hoy,
               revision: "pendiente"
             }])
-            .select()
+            .select("id")
             .single();
 
           if (errorInsertTarea) throw errorInsertTarea;
@@ -172,14 +193,14 @@ export default function SuperTaskManager() {
           usuario_id: user.id,
           tarea_id: tareaRealId, 
           estado_plan: "propuesto", 
-          fecha: getToday(),
+          fecha: hoy,
           progreso_reportado: 0,
           horas_reales: 0
         });
       }
 
-      const { error } = await supabase.from("planificacion_diaria").insert(registrosPlan);
-      if (error) throw error;
+      const { error: errorPlan } = await supabase.from("planificacion_diaria").insert(registrosPlan);
+      if (errorPlan) throw errorPlan;
 
       alert("Jornada enviada al Administrador. Estado: Esperando Aprobación.");
       await fetchData();
@@ -226,15 +247,14 @@ export default function SuperTaskManager() {
 
       if (errorPlan) throw errorPlan;
 
-      // 2. Actualizar la ejecución real en la tabla `tareas` usando la FK correcta
+      // 2. Actualizar la ejecución real en la tabla `tareas`
       const { error: errorTarea } = await supabase
         .from("tareas")
         .update({
           estado: estadoTarea,
           horas: parseFloat(horas),
           evidencia_url: fileUrl,
-          entregable: showReportingModal.entregable,
-          descripcion: comentario
+          entregable: showReportingModal.entregable
         })
         .eq("id", showReportingModal.tarea_id);
 
@@ -284,7 +304,7 @@ export default function SuperTaskManager() {
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* COLUMNA IZQUIERDA: BACKLOG */}
+        {/* BACKLOG */}
         <div className={`lg:col-span-7 space-y-6 transition-all duration-500 ${isSent ? 'opacity-40 grayscale-[0.8] pointer-events-none' : ''}`}>
           <header className="flex justify-between items-center">
             <div>
@@ -336,7 +356,7 @@ export default function SuperTaskManager() {
           </div>
         </div>
 
-        {/* COLUMNA DERECHA: PANEL DE CONTROL DIARIO */}
+        {/* JORNADA DIARIA */}
         <div className="lg:col-span-5 space-y-4">
           <div className="bg-[#37788a] rounded-[3.5rem] p-10 text-white shadow-2xl sticky top-8 border-4 border-white/20">
             <div className="flex justify-between items-center mb-10">
@@ -382,18 +402,6 @@ export default function SuperTaskManager() {
                 </div>
               )}
             </div>
-
-            {dailyPlan.length > 0 && dailyPlan.find(t => t.comentario_admin) && (
-              <div className="mt-8 bg-slate-900/40 border border-white/10 p-6 rounded-[2.5rem] backdrop-blur-md">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
-                  <p className="text-[9px] font-black text-amber-400 uppercase tracking-[0.2em]">Instrucciones del Admin</p>
-                </div>
-                <p className="text-xs text-white/90 font-medium leading-relaxed italic ml-5">
-                  "{dailyPlan.find(t => t.comentario_admin)?.comentario_admin}"
-                </p>
-              </div>
-            )}
 
             <div className="pt-10">
               {!isSent ? (
@@ -446,20 +454,12 @@ export default function SuperTaskManager() {
                 </div>
 
                 <div className="bg-slate-50 p-6 rounded-3xl border border-dashed border-slate-300">
-                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">
-                    Evidencia (Documentos u Imágenes)
-                  </label>
+                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Evidencia</label>
                   <input 
                     type="file" 
-                    accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip"
                     onChange={(e) => setFile(e.target.files[0])}
-                    className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-[10px] file:font-black file:uppercase file:bg-[#37788a] file:text-white hover:file:bg-slate-800 cursor-pointer"
+                    className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-[10px] file:font-black file:uppercase file:bg-[#37788a] file:text-white cursor-pointer"
                   />
-                  {file && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <span className="text-[10px] text-cyan-700 font-bold italic">✓ {file.name}</span>
-                    </div>
-                  )}
                 </div>
 
                 <textarea 
@@ -473,11 +473,11 @@ export default function SuperTaskManager() {
                   <button 
                     onClick={submitTaskReport} 
                     disabled={uploading}
-                    className={`w-full ${uploading ? 'bg-slate-400' : 'bg-[#37788a]'} text-white py-6 rounded-[2.5rem] font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition-all`}
+                    className="w-full bg-[#37788a] text-white py-6 rounded-[2.5rem] font-black uppercase text-xs tracking-widest shadow-xl transition-all"
                   >
-                    {uploading ? "Subiendo Archivo..." : "Sincronizar Reporte"}
+                    {uploading ? "Subiendo..." : "Sincronizar Reporte"}
                   </button>                  
-                  <button onClick={() => setShowReportingModal(null)} className="text-slate-400 font-black text-[10px] uppercase tracking-widest hover:text-slate-600 transition-colors">Cancelar</button>
+                  <button onClick={() => setShowReportingModal(null)} className="text-slate-400 font-black text-[10px] uppercase tracking-widest">Cancelar</button>
                 </div>
               </div>
            </div>
@@ -487,10 +487,10 @@ export default function SuperTaskManager() {
       {/* MODAL DE INCIDENCIAS */}
       {showEventModal && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-50 p-6">
-          <div className="bg-white rounded-[4rem] p-12 max-w-sm w-full space-y-8 shadow-2xl border-t-[10px] border-orange-400">
+          <div className="bg-white rounded-[4rem] p-12 max-w-sm w-full space-y-8 shadow-2xl">
             <h3 className="text-3xl font-black uppercase text-slate-800 italic tracking-tighter text-center">Imprevisto</h3>
             <div className="space-y-6">
-              <select className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-xs uppercase outline-none focus:ring-2 ring-orange-400/20" value={evento.tipo} onChange={(e) => setEvento({...evento, tipo: e.target.value})}>
+              <select className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-xs uppercase outline-none" value={evento.tipo} onChange={(e) => setEvento({...evento, tipo: e.target.value})}>
                 <option value="Incidencia Técnica">Incidencia Técnica</option>
                 <option value="Ineficiencia">Ineficiencia</option>
                 <option value="Tarea No Programada">Tarea No Programada</option>

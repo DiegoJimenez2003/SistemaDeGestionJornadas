@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import DuocLogo from "../assets/logoduoc.png";
 import { 
-  Users, Clock, FileCheck, AlertCircle, 
-  BarChart3, Trophy, Calendar, PieChart as PieIcon, 
-  RefreshCw, Zap, Activity, AlertTriangle, Download
+  Users, Clock, FileCheck,
+  RefreshCw, Zap, Activity, AlertTriangle, Download, Trophy, Calendar, PieChart as PieIcon
 } from "lucide-react";
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -36,22 +35,71 @@ export default function AdminDashboard() {
   async function loadDashboard() {
     try {
       setLoading(true);
-      const [tareasRes, entregablesRes] = await Promise.all([
-        supabase.from("tareas").select("*, codigos_tarea(codigo, descripcion)"),
-        supabase.from("entregables").select("*")
+      
+      // 1. Traemos la información de todas las tablas necesarias
+      const [tareasRes, codigosRes, entregablesRes, perfilesRes] = await Promise.all([
+        supabase.from("tareas").select("*"),
+        supabase.from("codigos_tarea").select("*"),
+        supabase.from("entregables").select("*"),
+        supabase.from("perfiles").select("*") // Traemos todo el objeto del perfil para estar seguros
       ]);
 
-      const allTareas = tareasRes.data || [];
+      const rawTareas = tareasRes.data || [];
+      const safeCodigos = codigosRes.data || [];
       const allEntregables = entregablesRes.data || [];
+      const safePerfiles = perfilesRes.data || [];
+      
       const hoy = new Date();
       hoy.setHours(0, 0, 0, 0);
+
+      // 2. Cruzamos las tareas con los perfiles reales de forma flexible
+      const allTareas = rawTareas.map(t => {
+        const codigoRelacionado = safeCodigos.find(c => Number(c.id) === Number(t.codigo_id));
+        
+        // 🔍 Intentamos buscar el perfil comparando con 'id' o con 'user_id' por si acaso
+        const perfilRelacionado = safePerfiles.find(p => 
+          String(p.id || '').toLowerCase() === String(t.usuario_id || '').toLowerCase() ||
+          String(p.user_id || '').toLowerCase() === String(t.usuario_id || '').toLowerCase()
+        );
+        
+        let nombreConstruido = "";
+        
+        if (perfilRelacionado) {
+          // Si encuentra el perfil, tomamos sus campos de nombre y apellido
+          const nombre = perfilRelacionado.nombre || perfilRelacionado.nombre_completo || "";
+          const apellido = perfilRelacionado.apellido || "";
+          nombreConstruido = `${nombre} ${apellido}`.trim();
+        }
+        
+        // Si no se pudo armar un nombre del perfil, usamos fallbacks ordenados
+        if (!nombreConstruido) {
+          if (t.nombre_trabajador && !t.nombre_trabajador.includes("-")) {
+            nombreConstruido = t.nombre_trabajador.trim();
+          } else if (t.usuario_id) {
+            // Si sigue saliendo el UUID completo, mostramos los primeros caracteres de forma elegante
+            nombreConstruido = `Usuario (${String(t.usuario_id).substring(0, 6)})`;
+          } else {
+            nombreConstruido = "Colaborador General";
+          }
+        }
+
+        return {
+          ...t,
+          codigos_tarea: codigoRelacionado ? {
+            codigo: codigoRelacionado.codigo,
+            descripcion: codigoRelacionado.descripcion
+          } : null,
+          trabajador_final: nombreConstruido
+        };
+      });
 
       const tareasMes = allTareas.filter(t => {
         const fechaTarea = new Date(t.fecha || t.created_at);
         return fechaTarea.getMonth() === selectedMonth;
       });
 
-      const nombresBrutos = [...new Set(tareasMes.map(t => (t.nombre_trabajador || "Sin Nombre").trim()))];
+      // Normalización para juntar nombres idénticos o variaciones de mayúsculas/minúsculas
+      const nombresBrutos = [...new Set(tareasMes.map(t => t.trabajador_final))];
       const nombresOrdenados = nombresBrutos.sort((a, b) => b.length - a.length);
       
       const mapaNombresOficiales = {};
@@ -64,9 +112,10 @@ export default function AdminDashboard() {
 
       const tareasNormalizadas = tareasMes.map(t => ({
         ...t,
-        colaboradorOficial: mapaNombresOficiales[(t.nombre_trabajador || "Sin Nombre").trim()]
+        colaboradorOficial: mapaNombresOficiales[t.trabajador_final]
       }));
 
+      // Agrupamos las horas por el nombre del colaborador
       const statsPorUsuario = {};
       tareasNormalizadas.forEach(t => {
         const oficial = t.colaboradorOficial;
@@ -85,14 +134,15 @@ export default function AdminDashboard() {
         const oficial = t.colaboradorOficial;
         const key = `${proyecto}---${oficial}`; 
         if (!proyMap[key]) {
-          proyMap[key] = { proyecto, colaborador: oficial, horas: 0 };
+          proyMap[key] = { proyecto, colaborador: oficial, hours: 0 };
         }
-        proyMap[key].horas += (Number(t.horas) || 0);
+        proyMap[key].hours += (Number(t.horas) || 0);
       });
 
       const listaProyectosFinal = Object.values(proyMap).map(item => ({
-        ...item,
-        horas: Number(item.horas.toFixed(2)) 
+        proyecto: item.proyecto,
+        colaborador: item.colaborador,
+        horas: Number(item.hours.toFixed(2)) 
       })).sort((a, b) => {
         if (a.proyecto < b.proyecto) return -1;
         if (a.proyecto > b.proyecto) return 1;
@@ -119,12 +169,14 @@ export default function AdminDashboard() {
           proyecto: ent.proyecto_nombre,
           limite: ent.horas_presupuestadas || 0,
           consumido: horasConsumidas,
-          porcentaje: ent.horas_presupuestadas > 0 ? (horasConsumidas / ent.horas_presupuestadas) * 100 : 0
+          percentage: ent.horas_presupuestadas > 0 ? (horasConsumidas / ent.horas_presupuestadas) * 100 : 0
         };
       });
-      setRiesgoData(saludEntregables.sort((a, b) => b.porcentaje - a.porcentaje));
+      
+      const riesgoFormateado = saludEntregables.map(e => ({ ...e, porcentaje: e.percentage })).sort((a, b) => b.porcentaje - a.porcentaje);
+      setRiesgoData(riesgoFormateado);
 
-      const pendientes = tareasNormalizadas.filter(t => t.revision === "sin_revisar").length;
+      const pendientes = tareasNormalizadas.filter(t => t.revision === "sin_revisar" || t.revision === "pendiente").length;
       const totalHoras = tareasNormalizadas.reduce((acc, t) => acc + (Number(t.horas) || 0), 0);
 
       setStats({
@@ -132,7 +184,7 @@ export default function AdminDashboard() {
         pendientes,
         horasMes: Number(totalHoras.toFixed(2)),
         entregables: allEntregables.length,
-        enRiesgo: saludEntregables.filter(e => e.porcentaje >= 100).length,
+        enRiesgo: riesgoFormateado.filter(e => e.porcentaje >= 100).length,
         atrasadas: atrasadas.length
       });
 
@@ -153,11 +205,9 @@ export default function AdminDashboard() {
     const primaryColor = [99, 102, 241]; 
     const accentColor = [244, 63, 94];  
     
-    // Banner Azul Suave
     doc.setFillColor(238, 242, 255); 
     doc.rect(0, 0, 210, 40, 'F');
 
-    // Texto de Cabecera
     doc.setTextColor(49, 46, 129);
     doc.setFontSize(18);
     doc.setFont("helvetica", "bold");
@@ -168,10 +218,8 @@ export default function AdminDashboard() {
     doc.text(`MES DE CONTROL: ${MONTHS[selectedMonth].toUpperCase()} ${new Date().getFullYear()}`, 14, 30);
     doc.text(`GENERADO: ${new Date().toLocaleString()}`, 14, 35);
 
-    // --- LOGO DE LA EMPRESA ---
     if (DuocLogo) {
       try {
-        // x=165, y=5, ancho=30, alto=30 (Ajustado para formato .png)
         doc.addImage(DuocLogo, 'PNG', 160, 10, 40, 0, undefined, 'FAST');
       } catch (error) {
         console.warn("No se pudo cargar el logo:", error);
@@ -232,9 +280,9 @@ export default function AdminDashboard() {
         startY: 25,
         head: [['Colaborador', 'Proyecto', 'Tarea / Descripción', 'Vencimiento', 'HH']],
         body: tareasAtrasadasList.map(t => [
-          t.nombre_trabajador,
+          t.trabajador_final,
           t.proyecto,
-          t.codigos_tarea?.descripcion || t.tarea || 'Sin descripción',
+          t.codigos_tarea?.descripcion || t.descripcion || 'Sin descripción técnica',
           new Date(t.fecha_vencimiento).toLocaleDateString(),
           t.horas
         ]),
@@ -300,7 +348,6 @@ export default function AdminDashboard() {
             </div>
           </div>
           
-          {/* Logo en el UI (derecha) */}
           <div className="flex items-center gap-4">
             <div className="flex gap-3">
                 <button onClick={generatePDF} className="px-6 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl shadow-xl transition-all font-bold flex items-center gap-3 active:scale-95">
@@ -378,11 +425,7 @@ export default function AdminDashboard() {
                   </div>
                 ) : (
                   tareasAtrasadasList.map((t, i) => {
-                    const rawName = (t.nombre_trabajador || "Sin Nombre").trim().toLowerCase();
-                    const colaboradorOficial = chartData.find(c => 
-                      c.name.toLowerCase().includes(rawName) || rawName.includes(c.name.toLowerCase())
-                    );
-                    const nombreAMostrar = colaboradorOficial ? colaboradorOficial.name : t.nombre_trabajador;
+                    const nombreAMostrar = t.trabajador_final;
 
                     return (
                       <div key={i} className="relative group transition-all duration-300">
@@ -400,7 +443,7 @@ export default function AdminDashboard() {
                             </div>
                             <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
                               <p className="text-[10px] font-black text-slate-400 uppercase mb-1">{t.codigos_tarea?.codigo || 'ID-EXT'}</p>
-                              <p className="text-xs font-bold text-slate-600 leading-tight italic line-clamp-2">{t.codigos_tarea?.descripcion || 'Sin descripción técnica'}</p>
+                              <p className="text-xs font-bold text-slate-600 leading-tight italic line-clamp-2">{t.codigos_tarea?.descripcion || t.descripcion || 'Sin descripción técnica'}</p>
                             </div>
                             <div className="flex justify-between items-center mt-2">
                               <div className="flex items-center gap-1.5">
@@ -422,7 +465,7 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="bg-white p-8 rounded-[3rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+            <div className="bg-white p-8 rounded-[3rem] border border-slate-200 shadow-sm overflow-hidden relative flex flex-col">
               <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-3 italic uppercase shrink-0">
                 <Zap className="text-rose-500" /> Monitoreo de Riesgo de Horas
               </h3>
