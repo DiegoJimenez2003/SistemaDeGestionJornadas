@@ -12,13 +12,33 @@ export default function AdminAprobaciones() {
   const [busqueda, setBusqueda] = useState("");
   const [userRole, setUserRole] = useState("");
   
-  // --- ESTADO QUE FALTABA PARA EL DESPLEGABLE ---
+  // --- ESTADO DEL DESPLEGABLE DE ASISTENCIA ---
   const [showAsistencia, setShowAsistencia] = useState(false);
+
+  // Helper crucial para transformar la estructura de la nueva BD a los campos planos de la vista
+  const normalizarEstructuraPlana = (lista) => {
+    return (lista || []).map(item => {
+      const tareaRelacional = item.tareas;
+      return {
+        ...item,
+        tareas: tareaRelacional ? {
+          id: tareaRelacional.id,
+          // Accedemos al join anidado: tareas -> proyectos -> nombre
+          proyecto: tareaRelacional.proyecto?.nombre || "Sin Proyecto",
+          // En tu tabla tareas, la descripción actúa como el entregable/detalle de la planificación
+          entregable: tareaRelacional.descripcion || "Sin Descripción",
+          // Accedemos al join anidado: tareas -> codigos_tarea -> codigo
+          codigos_tarea: tareaRelacional.codigos_tarea ? { codigo: tareaRelacional.codigos_tarea.codigo } : null
+        } : null
+      };
+    });
+  };
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
       // 0. ROL Y PERFILES
       const { data: perfil } = await supabase.from("perfiles").select("rol").eq("user_id", user.id).single();
@@ -27,27 +47,51 @@ export default function AdminAprobaciones() {
       const { data: todosLosPerfiles } = await supabase.from("perfiles").select("user_id, nombre, apellido");
       setTodosLosUsuarios(todosLosPerfiles || []);
 
-      // 1. PROPUESTAS (PENDIENTES)
-      const { data: propuestas } = await supabase
-        .from("planificacion_diaria")
-        .select(`
-          id, estado_plan, fecha, usuario_id,
-          perfiles:usuario_id (nombre, apellido),
-          tareas:tarea_id (id, proyecto, entregable, codigos_tarea (codigo))
-        `)
-        .eq("estado_plan", "propuesto");
+      // 1. PROPUESTAS (PENDIENTES) -> Corregido a estado_plan_id y joins profundos
+     // Busca estas líneas dentro de tu archivo y asegúrate de que usen 'tareas' en el join
+  const { data: propuestas, error: errPropuestas } = await supabase
+  .from("planificacion_diaria")
+  .select(`
+    id, 
+    estado_plan_id, 
+    fecha, 
+    usuario_id,
+    perfiles:usuario_id (nombre, apellido),
+    tareas:tarea_id (
+      id,
+      descripcion,
+      proyecto:proyecto_id (nombre),
+      codigos_tarea:codigo_id (codigo)
+    )
+  `)
+  .eq("estado_plan_id", "propuesto");
 
-      // 2. HISTORIAL
-      const { data: historicos } = await supabase
-        .from("planificacion_diaria")
-        .select(`
-          id, estado_plan, fecha, horas_reales, progreso_reportado, comentarios_cierre, usuario_id,
-          perfiles!inner (nombre, apellido, user_id), 
-          tareas!inner ( proyecto, entregable, codigos_tarea (codigo) )
-        `)
-        .neq("estado_plan", "propuesto")
-        .order('fecha', { ascending: false })
-        .limit(100);
+      if (errPropuestas) console.error("Error cargando propuestas:", errPropuestas.message);
+
+      // 2. HISTORIAL -> Excluyendo "propuesto"
+      const { data: historicos, error: errHistoricos } = await supabase
+  .from("planificacion_diaria")
+  .select(`
+    id, 
+    estado_plan_id, 
+    fecha, 
+    horas_reales, 
+    progreso_reportado, 
+    comentarios_cierre, 
+    usuario_id,
+    perfiles:usuario_id (nombre, apellido, user_id), 
+    tareas:tarea_id (
+      id,
+      descripcion,
+      proyecto:proyecto_id (nombre),
+      codigos_tarea:codigo_id (codigo)
+    )
+  `)
+  .neq("estado_plan_id", "propuesto")
+  .order('fecha', { ascending: false })
+  .limit(100);
+
+      if (errHistoricos) console.error("Error cargando históricos:", errHistoricos.message);
 
       // 3. EVENTOS / IMPREVISTOS
       const { data: eventos } = await supabase.from("eventos_jornada").select("*").order('fecha', { ascending: false });
@@ -57,10 +101,13 @@ export default function AdminAprobaciones() {
         perfiles: todosLosPerfiles?.find(p => p.user_id === ev.usuario_id) || { nombre: "Usuario", apellido: "Desconocido" }
       }));
 
-      setDataRaw(propuestas || []);
-      setHistorial(historicos || []);
+      // Seteamos los estados usando el normalizador para no romper el HTML/Tailwind
+      const propuestasNormalizadas = normalizarEstructuraPlana(propuestas);
+      setDataRaw(propuestasNormalizadas);
+      setHistorial(normalizarEstructuraPlana(historicos));
       setIncidenciasRaw(eventosConFormato);
 
+      // Disparar la carga del Backlog para los usuarios que tienen propuestas pendientes
       const uids = [...new Set((propuestas || []).map(d => d.usuario_id))];
       uids.forEach(uid => fetchUserBacklog(uid));
 
@@ -74,8 +121,32 @@ export default function AdminAprobaciones() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   async function fetchUserBacklog(uid) {
-    const { data } = await supabase.from("tareas").select(`id, entregable, proyecto, codigos_tarea(codigo)`).eq("usuario_id", uid).eq("estado", "Pendiente");
-    setBacklogs(prev => ({ ...prev, [uid]: data || [] }));
+    // Consulta adaptada a la nueva tabla de 'tareas' conectando con sus respectivas tablas maestras
+    const { data, error } = await supabase
+      .from("tareas")
+      .select(`
+        id, 
+        descripcion, 
+        proyecto:proyecto_id (nombre), 
+        codigos_tarea:codigo_id (codigo)
+      `)
+      .eq("usuario_id", uid)
+      .eq("estado_id", "en_progreso"); // Corregido: de 'estado' a 'estado_id' y usando el slug real
+
+    if (error) {
+      console.error("Error cargando el backlog del usuario:", error.message);
+      return;
+    }
+
+    // Normalizamos el formato del backlog individual para que la sección de sugerencias funcione limpia
+    const backlogMapeado = (data || []).map(t => ({
+      id: t.id,
+      proyecto: t.proyecto?.nombre || "Sin Proyecto",
+      entregable: t.descripcion || "Sin descripción",
+      codigos_tarea: t.codigos_tarea ? { codigo: t.codigos_tarea.codigo } : null
+    }));
+
+    setBacklogs(prev => ({ ...prev, [uid]: backlogMapeado }));
   }
 
   // --- LÓGICA DE ASISTENCIA ---
@@ -87,7 +158,7 @@ export default function AdminAprobaciones() {
     );
 
     return todosLosUsuarios.map(u => ({
-      nombre: `${u.nombre} ${u.apellido}`,
+      nombre: `${u.nombre || "Usuario"} ${u.apellido || ""}`,
       enviado: idsPendientes.has(u.user_id) || idsProcesadosHoy.has(u.user_id)
     })).sort((a, b) => b.enviado - a.enviado);
   }, [todosLosUsuarios, dataRaw, historial]);
@@ -104,7 +175,7 @@ export default function AdminAprobaciones() {
     );
     return filtrado.reduce((acc, curr) => {
       let key = curr.usuario_id;
-      if (!acc[key]) acc[key] = { titulo: `${curr.perfiles?.nombre} ${curr.perfiles?.apellido}`, tareas: [] };
+      if (!acc[key]) acc[key] = { titulo: `${curr.perfiles?.nombre || "Usuario"} ${curr.perfiles?.apellido || ""}`, tareas: [] };
       acc[key].tareas.push(curr);
       return acc;
     }, {});
@@ -113,9 +184,12 @@ export default function AdminAprobaciones() {
   const procesarJornada = async (grupoKey, decision) => {
     const grupo = agrupados[grupoKey];
     if (!grupo) return;
+    
+    // Corregido: Columna estado_plan_id según tu DDL
     const { error } = await supabase.from("planificacion_diaria")
-      .update({ estado_plan: decision, comentario_admin: comentarios[grupoKey] || "" })
+      .update({ estado_plan_id: decision, comentario_admin: comentarios[grupoKey] || "" })
       .in("id", grupo.tareas.map(t => t.id));
+      
     if (!error) fetchData();
   };
 
@@ -138,31 +212,40 @@ export default function AdminAprobaciones() {
   }, [incidenciasRaw]);
 
   const agregarTareaPlan = async (usuarioId, tarea) => {
-  const hoy = new Date().toISOString().split('T')[0];
-  
-  const { data, error } = await supabase
-    .from("planificacion_diaria")
-    .insert([
-      { 
-        usuario_id: usuarioId, 
-        tarea_id: tarea.id, 
-        fecha: hoy, 
-        estado_plan: 'propuesto' 
-      }
-    ])
-    .select(`
-      id, estado_plan, fecha, usuario_id,
-      perfiles:usuario_id (nombre, apellido),
-      tareas:tarea_id (id, proyecto, entregable, codigos_tarea (codigo))
-    `);
+    const hoy = new Date().toISOString().split('T')[0];
+    
+    // Inserción adaptada con la columna estado_plan_id correcta
+    const { data, error } = await supabase
+  .from("planificacion_diaria")
+  .insert([
+    { 
+      usuario_id: usuarioId, 
+      tarea_id: tarea.id, 
+      fecha: hoy, 
+      estado_plan_id: 'propuesto' 
+    }
+  ])
+  .select(`
+    id, 
+    estado_plan_id, 
+    fecha, 
+    usuario_id,
+    perfiles:usuario_id (nombre, apellido),
+    tareas:tarea_id (
+      id,
+      descripcion,
+      proyecto:proyecto_id (nombre),
+      codigos_tarea:codigo_id (codigo)
+    )
+  `);
 
-  if (!error) {
-    // Actualizamos el estado local para que aparezca en la lista inmediatamente
-    setDataRaw(prev => [...prev, data[0]]);
-  } else {
-    console.error("Error al agregar tarea:", error.message);
-  }
-};
+    if (!error && data && data[0]) {
+      const nuevoItemNormalizado = normalizarEstructuraPlana(data)[0];
+      setDataRaw(prev => [...prev, nuevoItemNormalizado]);
+    } else {
+      console.error("Error al agregar tarea de contrapropuesta:", error?.message);
+    }
+  };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center font-black text-slate-400 animate-pulse uppercase tracking-widest">Cargando Panel de Control...</div>;
 
@@ -172,14 +255,11 @@ export default function AdminAprobaciones() {
       {/* HEADER DINÁMICO */}
       <header className="max-w-7xl mx-auto mb-10 relative">
         <div className="flex flex-col md:flex-row justify-between items-center md:items-end gap-6">
-          
-          {/* LADO IZQUIERDO: TÍTULO */}
           <div className="w-full md:w-auto">
             <h1 className="text-4xl font-black uppercase italic tracking-tighter leading-none">Control Admin</h1>
             <p className="text-[#37788a] text-[10px] font-black uppercase tracking-widest mt-1">Gestión de Jornadas Diarias</p>
           </div>
           
-          {/* LADO DERECHO: BUSCADOR Y ASISTENCIA */}
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto md:ml-auto items-stretch sm:items-center">
             <div className="relative group flex-1 sm:flex-none">
               <span className="absolute inset-y-0 left-5 flex items-center text-slate-400 group-focus-within:text-[#37788a] transition-colors">
@@ -222,7 +302,7 @@ export default function AdminAprobaciones() {
                         }`}
                       >
                         <span className="text-[10px] font-black uppercase truncate mr-2">{worker.nombre}</span>
-                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${worker.enviado ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.4)]"}`}></div>
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${worker.enviado ? "bg-emerald-500" : "bg-red-500"}`}></div>
                       </div>
                     ))}
                   </div>
@@ -234,99 +314,98 @@ export default function AdminAprobaciones() {
       </header>
 
       {/* GRILLA DE PROPUESTAS */}
-<div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
-  {Object.entries(agrupados).map(([key, grupo]) => (
-    <div key={key} className="bg-white rounded-[2.5rem] shadow-xl border border-white overflow-hidden flex flex-col transition-transform hover:scale-[1.01]">
-      {/* HEADER */}
-      <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
-        <h2 className="font-black uppercase text-lg italic tracking-tighter">{grupo.titulo}</h2>
-        <span className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-black">{grupo.tareas.length}</span>
-      </div>
-      
-      {/* TAREAS PROPUESTAS (LISTA PRINCIPAL) */}
-      <div className="p-6 space-y-3 flex-1 overflow-y-auto max-h-[220px] bg-white">
-        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Plan Propuesto:</p>
-        {grupo.tareas.map(t => (
-          <div key={t.id} className="group p-3 rounded-2xl bg-slate-50 border border-slate-100 flex justify-between items-center hover:border-red-200 transition-colors">
-            <div className="flex-1 min-w-0 pr-4">
-              <p className="text-[8px] font-black text-[#37788a] uppercase truncate">{t.tareas?.proyecto}</p>
-              <p className="text-[11px] font-bold text-slate-800 leading-tight truncate">{t.tareas?.codigos_tarea?.codigo || t.tareas?.entregable}</p>
+      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
+        {Object.entries(agrupados).map(([key, grupo]) => (
+          <div key={key} className="bg-white rounded-[2.5rem] shadow-xl border border-white overflow-hidden flex flex-col transition-transform hover:scale-[1.01]">
+            {/* HEADER */}
+            <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
+              <h2 className="font-black uppercase text-lg italic tracking-tighter">{grupo.titulo}</h2>
+              <span className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-black">{grupo.tareas.length}</span>
             </div>
-            <button 
-              onClick={() => quitarTarea(t.id)} 
-              className="p-2 text-slate-300 hover:text-red-500 transition-all"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M20 12H4"/></svg>
-            </button>
+            
+            {/* TAREAS PROPUESTAS */}
+            <div className="p-6 space-y-3 flex-1 overflow-y-auto max-h-[220px] bg-white">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Plan Propuesto:</p>
+              {grupo.tareas.map(t => (
+                <div key={t.id} className="group p-3 rounded-2xl bg-slate-50 border border-slate-100 flex justify-between items-center hover:border-red-200 transition-colors">
+                  <div className="flex-1 min-w-0 pr-4">
+                    <p className="text-[8px] font-black text-[#37788a] uppercase truncate">{t.tareas?.proyecto}</p>
+                    <p className="text-[11px] font-bold text-slate-800 leading-tight truncate">{t.tareas?.codigos_tarea?.codigo || t.tareas?.entregable}</p>
+                  </div>
+                  <button 
+                    onClick={() => quitarTarea(t.id)} 
+                    className="p-2 text-slate-300 hover:text-red-500 transition-all"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M20 12H4"/></svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* SUGERIR TAREAS DESDE BACKLOG */}
+            <div className="px-6 py-4 bg-slate-50/80 border-t border-b border-slate-100">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                Sugerir Pendientes (Click para añadir)
+              </p>
+              
+              <div className="flex gap-3 overflow-x-auto pb-3 snap-x">
+                {backlogs[key]?.filter(b => !grupo.tareas.some(t => t.tareas?.id === b.id)).length > 0 ? (
+                  backlogs[key]
+                    .filter(tareaBacklog => !grupo.tareas.some(tareaPlan => tareaPlan.tareas?.id === tareaBacklog.id))
+                    .map(tarea => (
+                      <button 
+                        key={tarea.id}
+                        onClick={() => agregarTareaPlan(key, tarea)}
+                        className="snap-start shrink-0 w-32 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm hover:border-emerald-400 hover:shadow-md transition-all group"
+                      >
+                        <p className="text-[7px] font-black text-slate-400 uppercase truncate mb-1">{tarea.proyecto}</p>
+                        <p className="text-[9px] font-extrabold text-slate-700 leading-tight h-7 line-clamp-2 mb-2">
+                          {tarea.codigos_tarea?.codigo || tarea.entregable}
+                        </p>
+                        <div className="flex justify-center text-emerald-500 group-hover:scale-125 transition-transform">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M12 4v16m8-8H4"/>
+                          </svg>
+                        </div>
+                      </button>
+                    ))
+                ) : (
+                  <div className="w-full text-center py-4 bg-white/50 rounded-2xl border border-dashed border-slate-200">
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">
+                      {backlogs[key]?.length === 0 ? "Sin tareas en backlog" : "Todas las tareas asignadas"}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ACCIONES DE APROBACIÓN */}
+            <div className="p-6 bg-white space-y-3">
+              <textarea 
+                placeholder="Comentario de revisión..."
+                className="w-full text-[10px] font-bold p-3 rounded-xl border-none shadow-inner bg-slate-50 outline-none focus:ring-1 focus:ring-slate-200 transition-all"
+                onChange={(e) => setComentarios({...comentarios, [key]: e.target.value})}
+                rows="2"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <button 
+                  onClick={() => procesarJornada(key, 'aprobado')} 
+                  className="bg-[#37788a] text-white py-3.5 rounded-xl font-black text-[10px] uppercase shadow-lg shadow-[#37788a]/20 hover:bg-[#2d6372] active:scale-95 transition-all"
+                >
+                  Aprobar
+                </button>
+                <button 
+                  onClick={() => procesarJornada(key, 'rechazado')} 
+                  className="bg-white text-red-500 border border-red-100 py-3.5 rounded-xl font-black text-[10px] uppercase hover:bg-red-50 active:scale-95 transition-all"
+                >
+                  Rechazar
+                </button>
+              </div>
+            </div>
           </div>
         ))}
       </div>
-
-      {/* --- SECCIÓN CONTRA-PROPUESTA: HORIZONTAL BACKLOG FILTRADO --- */}
-      <div className="px-6 py-4 bg-slate-50/80 border-t border-b border-slate-100">
-        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          Sugerir Pendientes (Click para añadir)
-        </p>
-        
-        <div className="flex gap-3 overflow-x-auto pb-3 custom-scrollbar snap-x">
-          {/* FILTRO: Solo mostramos tareas del backlog que NO estén en la planificación actual */}
-          {backlogs[key]?.filter(b => !grupo.tareas.some(t => t.tareas?.id === b.id)).length > 0 ? (
-            backlogs[key]
-              .filter(tareaBacklog => !grupo.tareas.some(tareaPlan => tareaPlan.tareas?.id === tareaBacklog.id))
-              .map(tarea => (
-                <button 
-                  key={tarea.id}
-                  onClick={() => agregarTareaPlan(key, tarea)}
-                  className="snap-start shrink-0 w-32 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm hover:border-emerald-400 hover:shadow-md transition-all group"
-                >
-                  <p className="text-[7px] font-black text-slate-400 uppercase truncate mb-1">{tarea.proyecto}</p>
-                  <p className="text-[9px] font-extrabold text-slate-700 leading-tight h-7 line-clamp-2 mb-2">
-                    {tarea.codigos_tarea?.codigo || tarea.entregable}
-                  </p>
-                  <div className="flex justify-center text-emerald-500 group-hover:scale-125 transition-transform">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M12 4v16m8-8H4"/>
-                    </svg>
-                  </div>
-                </button>
-              ))
-          ) : (
-            <div className="w-full text-center py-4 bg-white/50 rounded-2xl border border-dashed border-slate-200">
-              <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">
-                {backlogs[key]?.length === 0 ? "Sin tareas en backlog" : "Todas las tareas asignadas"}
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* FOOTER: COMENTARIOS Y ACCIONES */}
-      <div className="p-6 bg-white space-y-3">
-        <textarea 
-          placeholder="Comentario de revisión..."
-          className="w-full text-[10px] font-bold p-3 rounded-xl border-none shadow-inner bg-slate-50 outline-none focus:ring-1 focus:ring-slate-200 transition-all"
-          onChange={(e) => setComentarios({...comentarios, [key]: e.target.value})}
-          rows="2"
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <button 
-            onClick={() => procesarJornada(key, 'aprobado')} 
-            className="bg-[#37788a] text-white py-3.5 rounded-xl font-black text-[10px] uppercase shadow-lg shadow-[#37788a]/20 hover:bg-[#2d6372] active:scale-95 transition-all"
-          >
-            Aprobar
-          </button>
-          <button 
-            onClick={() => procesarJornada(key, 'rechazado')} 
-            className="bg-white text-red-500 border border-red-100 py-3.5 rounded-xl font-black text-[10px] uppercase hover:bg-red-50 active:scale-95 transition-all"
-          >
-            Rechazar
-          </button>
-        </div>
-      </div>
-    </div>
-  ))}
-</div>
 
       {/* HISTORIAL */}
       <section className="max-w-7xl mx-auto mt-24">
@@ -373,8 +452,8 @@ export default function AdminAprobaciones() {
                       <div>
                         <div className="flex justify-between items-start mb-4">
                             <span className="text-[9px] font-black bg-slate-900 text-white px-3 py-1 rounded-full uppercase">{h.perfiles?.nombre}</span>
-                            <span className={`text-[8px] font-black px-2 py-1 rounded uppercase ${h.estado_plan === 'aprobado' ? 'text-green-500' : 'text-red-500'}`}>
-                              ● {h.estado_plan}
+                            <span className={`text-[8px] font-black px-2 py-1 rounded uppercase ${h.estado_plan_id === 'aprobado' ? 'text-green-500' : 'text-red-500'}`}>
+                              ● {h.estado_plan_id}
                             </span>
                         </div>
                         <h4 className="text-sm font-black text-slate-800 uppercase leading-tight mb-1">{h.tareas?.codigos_tarea?.codigo}</h4>
@@ -392,10 +471,10 @@ export default function AdminAprobaciones() {
                         </div>
 
                         {h.comentarios_cierre && (
-                            <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
-                                <p className="text-[8px] font-black text-blue-400 uppercase mb-1 italic">Reporte del Trabajador:</p>
-                                <p className="text-[11px] text-slate-600 font-medium leading-relaxed">"{h.comentarios_cierre}"</p>
-                            </div>
+                          <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
+                            <p className="text-[8px] font-black text-blue-400 uppercase mb-1 italic">Reporte del Trabajador:</p>
+                            <p className="text-[11px] text-slate-600 font-medium leading-relaxed">"{h.comentarios_cierre}"</p>
+                          </div>
                         )}
                       </div>
                     </div>

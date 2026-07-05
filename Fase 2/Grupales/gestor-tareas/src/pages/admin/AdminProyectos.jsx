@@ -21,7 +21,7 @@ export default function AdminProyectos() {
   const [nombre, setNombre] = useState("");
   const [clienteId, setClienteId] = useState(""); 
   const [descripcion, setDescripcion] = useState("");
-  const [estado, setEstado] = useState("activo");
+  const [estadoId, setEstadoId] = useState("activo"); // Adaptado a estado_id
   
   // FECHAS FORMULARIO CREAR
   const [fechaInicioPlan, setFechaInicioPlan] = useState("");
@@ -38,12 +38,12 @@ export default function AdminProyectos() {
   const [filtroCliente, setFiltroCliente] = useState("");
 
   // ESTADOS EDICIÓN DE PROYECTO (DENTRO DEL ACORDEÓN)
-  const [editFechas, setEditFechas] = useState({ id: null, inicioReal: "", finReal: "", avance: 0, estado: "" });
+  const [editFechas, setEditFechas] = useState({ id: null, inicioReal: "", finReal: "", avance: 0, estadoId: "" });
 
   // MODALES
   const [proyectoExpandido, setProyectoExpandido] = useState(null); 
   const [entregablesProy, setEntregablesProy] = useState([]); 
-  const [modalTareas, setModalTareas] = useState({ abierto: false, entregable: null, tareas: [] });
+  const [modalTareas, setModalTareas] = useState({ abierto: false, entregableNombre: "", tareas: [] });
   
   const [modalCliente, setModalCliente] = useState(false);
   const [nuevoCliente, setNuevoCliente] = useState({ nombre: "", rut: "", contacto: "", correo: "" });
@@ -86,12 +86,12 @@ export default function AdminProyectos() {
     setTrabajadores(dataWorkers || []);
   }
 
-  // Cargar entregables e inicializar formulario de edición rápida del proyecto
+  // Cargar entregables vinculados por proyecto_id
   async function toggleProyecto(proyecto) {
     if (proyectoExpandido === proyecto.id) {
       setProyectoExpandido(null);
       setEntregablesProy([]);
-      setEditFechas({ id: null, inicioReal: "", finReal: "", avance: 0, estado: "" });
+      setEditFechas({ id: null, inicioReal: "", finReal: "", avance: 0, estadoId: "" });
     } else {
       setProyectoExpandido(proyecto.id);
       
@@ -100,18 +100,18 @@ export default function AdminProyectos() {
         inicioReal: proyecto.fecha_inicio_real || "",
         finReal: proyecto.fecha_fin_real || "",
         avance: proyecto.porcentaje_avance || 0,
-        estado: proyecto.estado || "activo"
+        estadoId: proyecto.estado_id || "activo"
       });
 
       const { data } = await supabase
         .from("entregables")
         .select("*")
-        .eq("proyecto_nombre", proyecto.nombre);
+        .eq("proyecto_id", proyecto.id); // Cambio clave: Filtrado por id relacional
       setEntregablesProy(data || []);
     }
   }
 
-  // Actualizar las fechas reales y progreso desde el historial
+  // Actualizar las fechas reales y progreso mapeados al nuevo modelo
   async function guardarCambiosProyecto(proyectoId) {
     const { error } = await supabase
       .from("proyectos")
@@ -119,7 +119,7 @@ export default function AdminProyectos() {
         fecha_inicio_real: editFechas.inicioReal || null,
         fecha_fin_real: editFechas.finReal || null,
         porcentaje_avance: Number(editFechas.avance),
-        estado: editFechas.estado
+        estado_id: editFechas.estadoId // Guardando en la nueva columna de catálogo
       })
       .eq("id", proyectoId);
 
@@ -132,15 +132,16 @@ export default function AdminProyectos() {
     }
   }
 
+  // Cargar tareas del entregable con relaciones limpias
   async function verTareasEntregable(entregable) {
     const { data, error } = await supabase
       .from("tareas")
       .select("*, codigos_tarea(codigo)")
-      .eq("entregable", entregable.nombre)
-      .eq("proyecto", entregable.proyecto_nombre);
+      .eq("entregable_id", entregable.id) // Filtrado por relación numérica
+      .eq("proyecto_id", entregable.proyecto_id);
     
     if (!error) {
-      setModalTareas({ abierto: true, entregable: entregable.nombre, tareas: data || [] });
+      setModalTareas({ abierto: true, entregableNombre: entregable.nombre, tareas: data || [] });
     }
   }
 
@@ -196,7 +197,7 @@ export default function AdminProyectos() {
         nombre, 
         cliente_id: clienteId || null, 
         descripcion: descripcion || null, 
-        estado, 
+        estado_id: estadoId, // Columna de catálogo asignada
         fecha_inicio_planificada: fechaInicioPlan, 
         fecha_fin_planificada: fechaFinPlan || null,
         fecha_inicio_real: fechaInicioReal || null,
@@ -218,7 +219,7 @@ export default function AdminProyectos() {
   }
 
   const resetForm = () => {
-    setNombre(""); setClienteId(""); setDescripcion(""); setEstado("activo"); 
+    setNombre(""); setClienteId(""); setDescripcion(""); setEstadoId("activo"); 
     setFechaInicioPlan(""); setFechaFinPlan(""); setFechaInicioReal(""); setFechaFinReal("");
     setPorcentajeAvance(0); setEncargados([""]);
   };
@@ -302,7 +303,7 @@ export default function AdminProyectos() {
             <div className="bg-white rounded-[2rem] w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl flex flex-col">
               <div className="p-6 border-b flex justify-between items-center bg-slate-50">
                 <div>
-                  <h3 className="text-2xl font-black italic uppercase tracking-tighter">{modalTareas.entregable}</h3>
+                  <h3 className="text-2xl font-black italic uppercase tracking-tighter">{modalTareas.entregableNombre}</h3>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tareas vinculadas</p>
                 </div>
                 <button onClick={() => setModalTareas({ ...modalTareas, abierto: false })} className="w-10 h-10 rounded-full bg-white border shadow-sm flex items-center justify-center font-bold">✕</button>
@@ -314,12 +315,12 @@ export default function AdminProyectos() {
                   modalTareas.tareas.map(t => (
                     <div key={t.id} className="p-4 border rounded-2xl flex justify-between items-center hover:bg-slate-50 transition">
                       <div>
-                        <p className="font-bold text-slate-800">{t.nombre_trabajador}</p>
+                        <p className="font-bold text-slate-800">{t.nombre_trabajador || "Trabajador asignado"}</p>
                         <p className="text-[10px] text-blue-500 font-black uppercase">{t.codigos_tarea?.codigo} | {t.fecha}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-xl font-black italic">{t.horas} HH</p>
-                        <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full uppercase ${t.revision === 'aprobada' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>{t.revision}</span>
+                        <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full uppercase ${t.revision_id === 'aprobada' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>{t.revision_id}</span>
                       </div>
                     </div>
                   ))
@@ -354,7 +355,7 @@ export default function AdminProyectos() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-bold text-gray-500 uppercase">Estado inicial</label>
-                  <select className="p-3 border rounded-lg bg-white text-sm" value={estado} onChange={(e) => setEstado(e.target.value)}>
+                  <select className="p-3 border rounded-lg bg-white text-sm" value={estadoId} onChange={(e) => setEstadoId(e.target.value)}>
                     <option value="activo">Activo</option>
                     <option value="pausado">Pausado</option>
                     <option value="cerrado">Cerrado</option>
@@ -454,7 +455,7 @@ export default function AdminProyectos() {
                     <div className="p-6 flex flex-col md:flex-row justify-between items-center gap-4 cursor-pointer hover:bg-slate-50" onClick={() => toggleProyecto(p)}>
                       <div className="flex-1">
                         <div className="flex items-center gap-3">
-                          <span className={`w-3 h-3 rounded-full ${p.estado === 'activo' ? 'bg-green-400' : p.estado === 'pausado' ? 'bg-amber-400' : 'bg-slate-300'}`}></span>
+                          <span className={`w-3 h-3 rounded-full ${p.estado_id === 'activo' ? 'bg-green-400' : p.estado_id === 'pausado' ? 'bg-amber-400' : 'bg-slate-300'}`}></span>
                           <p className="font-black text-xl text-slate-800 uppercase italic tracking-tighter">{p.nombre}</p>
                           <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{p.porcentaje_avance}% Avance</span>
                         </div>
@@ -475,7 +476,7 @@ export default function AdminProyectos() {
                       </div>
                     </div>
 
-                    {/* CONTENIDO EXPANDIDO (Seguimiento real en vivo) */}
+                    {/* CONTENIDO EXPANDIDO */}
                     {esExpandido && (
                       <div className="bg-slate-50 p-6 border-t-2 border-slate-100 space-y-6">
                         
@@ -521,8 +522,8 @@ export default function AdminProyectos() {
                               <label className="text-[10px] text-slate-500 font-bold uppercase">Estado Actual</label>
                               <select 
                                 className="p-2 border rounded-lg text-xs bg-slate-50 font-semibold"
-                                value={editFechas.estado}
-                                onChange={(e) => setEditFechas({ ...editFechas, estado: e.target.value })}
+                                value={editFechas.estadoId}
+                                onChange={(e) => setEditFechas({ ...editFechas, estadoId: e.target.value })}
                               >
                                 <option value="activo">Activo</option>
                                 <option value="pausado">Pausado</option>
@@ -590,36 +591,31 @@ export default function AdminProyectos() {
                                   {pms.map(pm => <option key={pm.user_id} value={pm.user_id}>({pm.rol}) {pm.nombre}</option>)}
                                 </select>
                                 {uid !== "" && (
-                                  <button onClick={() => eliminarEncargadoExistente(p.id, listaIds, idx)} className="text-red-400 hover:text-red-600 text-xs">✕</button>
+                                  <button onClick={() => eliminarEncargadoExistente(p.id, listaIds, idx)} className="text-red-500 text-xs">✕</button>
                                 )}
                               </div>
                             ))}
                           </div>
 
-                          <div className="space-y-2 border-l pl-6 border-slate-200">
-                            <h4 className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-4">Personal Asignado (Recursos)</h4>
-                            <div className="space-y-2">
-                              {p.proyecto_recursos?.map((res, idx) => (
-                                <div key={idx} className="flex items-center justify-between bg-white p-2 rounded-xl border border-slate-100 shadow-sm">
-                                  <span className="text-xs font-bold text-slate-600">{res.perfiles?.nombre} {res.perfiles?.apellido}</span>
-                                  <button onClick={() => eliminarRecurso(p.id, res.user_id)} className="text-red-400 hover:text-red-600 font-bold px-2">✕</button>
-                                </div>
+                          <div className="space-y-2">
+                            <h4 className="text-[10px] font-black text-orange-600 uppercase tracking-widest mb-4">Recursos Operativos</h4>
+                            <div className="flex flex-wrap gap-1.5 pb-2">
+                              {p.proyecto_recursos?.map(r => (
+                                <span key={r.user_id} className="inline-flex items-center gap-1 bg-white border px-2.5 py-1 rounded-full text-[11px] font-medium text-slate-700 shadow-sm">
+                                  {r.perfiles?.nombre} {r.perfiles?.apellido}
+                                  <button onClick={() => eliminarRecurso(p.id, r.user_id)} className="text-red-400 hover:text-red-600 ml-0.5">✕</button>
+                                </span>
                               ))}
                             </div>
-                            
                             <select 
-                              className="w-full p-2 text-xs border-2 border-dashed border-slate-200 rounded-xl bg-transparent mt-4 italic text-slate-500"
+                              className="w-full p-2 text-xs border rounded-xl bg-white"
                               value=""
                               onChange={(e) => agregarRecurso(p.id, e.target.value)}
                             >
-                              <option value="">+ Asignar personal operativo</option>
+                              <option value="">+ Asignar Operador...</option>
                               {trabajadores
-                                .filter(t => !p.proyecto_recursos?.some(r => r.user_id === t.user_id))
-                                .map(t => (
-                                  <option key={t.user_id} value={t.user_id}>
-                                    ({t.rol.toUpperCase()}) {t.nombre} {t.apellido}
-                                  </option>
-                                ))
+                                .filter(w => !p.proyecto_recursos?.some(r => r.user_id === w.user_id))
+                                .map(w => <option key={w.user_id} value={w.user_id}>{w.nombre} {w.apellido}</option>)
                               }
                             </select>
                           </div>

@@ -79,18 +79,18 @@ export default function SuperTaskManager() {
             proyecto: codigoRelacionado?.proyecto || "Proyecto Desconocido",
             proyecto_id: codigoRelacionado?.proyecto_id,
             entregable: codigoRelacionado?.entregable || "General",
-            importancia: metaRelacionado?.importancia || "Media",
-            urgencia: metaRelacionado?.urgencia || "Baja",
-            dificultad: metaRelacionado?.dificultad || "Media",
+            importancia: metaRelacionado?.importancia_id || "media",
+            urgencia: metaRelacionado?.urgencia_id || "baja",
+            dificultad: metaRelacionado?.dificultad_id || "media",
             prioritaria: metaRelacionado?.prioritaria || false,
-            horas: metaRelacionado?.horas || 0,
+            horas_acumuladas: metaRelacionado?.horas || 0, // 🌟 Renombrado para claridad (suma acumulada histórica)
             fecha_vencimiento: metaRelacionado?.fecha_vencimiento || "Sin Fecha",
-            estado_real: metaRelacionado?.estado || "En Progreso", // Estado real en la tabla tareas
-            revision: metaRelacionado?.revision || "pendiente"    // Estado de revisión de la tarea
+            estado_real: metaRelacionado?.estado_id || "en_progreso", 
+            revision: metaRelacionado?.revision_id || "pendiente"    
           };
         })
-        // 🔥 FILTRO CRÍTICO: Si la tarea ya está COMPLETADA y APROBADA por el admin, DESAPARECE del Backlog
-        .filter(task => !(task.estado_real === "Completada" && task.revision === "aprobada"));
+        // 🔥 FILTRO CRÍTICO: Remueve del backlog SÓLO si ya está completada e historial aprobado por admin
+        .filter(task => !(task.estado_real === "completada" && task.revision === "aprobada"));
 
       setTasks(backlogFiltrado);
 
@@ -105,7 +105,6 @@ export default function SuperTaskManager() {
       if (safePlan.length > 0) {
         const mappedPlan = safePlan.map(registro => {
           const metaReal = safeMetadatos.find(m => Number(m.id) === Number(registro.tarea_id));
-          // Buscamos de manera general en todo el pool cruzando por código id
           const codigoRelacionado = safeCodigos.find(c => Number(c.id) === Number(metaReal?.codigo_id));
           
           return {
@@ -114,17 +113,26 @@ export default function SuperTaskManager() {
             codigo: codigoRelacionado?.codigo || "S/C",
             descripcion: codigoRelacionado?.descripcion || "Tarea de Planificación",
             proyecto: codigoRelacionado?.proyecto || "General",
-            entregable: metaReal?.entregable || "General",
+            entregable: codigoRelacionado?.entregable || "General",
             plan_id: registro.id, 
             tarea_id: registro.tarea_id, 
-            estado_plan: registro.estado_plan, 
-            progreso_actual: registro.progreso_reportado,
-            comentario_admin: registro.comentario_admin
+            estado_plan_id: registro.estado_plan_id, 
+            progreso_actual: registro.progreso_reportado || 0,
+            horas_hoy: registro.horas_reales || 0, // 🔍 Horas registradas específicamente en este día
+            comentario_admin: registro.comentario_admin,
+            ya_reportado: registro.horas_reales > 0 || registro.progreso_reportado > 0 // 🔑 Bandera de bloqueo para el botón
           };
         });
 
         setDailyPlan(mappedPlan);
-        setIsSent(true);
+
+        // Si hay tareas vigentes propuestas, aprobadas o finalizadas de hoy, bloqueamos el backlog
+        const tieneTareasVivas = mappedPlan.some(item => 
+          item.estado_plan_id === 'propuesto' || 
+          item.estado_plan_id === 'aprobado'
+        );
+
+        setIsSent(tieneTareasVivas);
       } else {
         setDailyPlan([]);
         setIsSent(false);
@@ -153,19 +161,28 @@ export default function SuperTaskManager() {
       if (!user) return alert("Sesión inválida.");
       
       const hoy = getToday();
+
+      // Limpieza de registros rechazados anteriores de hoy
+      const { error: errorClean } = await supabase
+        .from("planificacion_diaria")
+        .delete()
+        .eq("usuario_id", user.id)
+        .eq("fecha", hoy)
+        .eq("estado_plan_id", "rechazado");
+
+      if (errorClean) console.error("Error al limpiar plan rechazado:", errorClean);
+
       const registrosPlan = [];
 
       for (const t of dailyPlan) {
         let tareaRealId = null;
 
-        const { data: tareaExistente, error: errorCheck } = await supabase
+        const { data: tareaExistente } = await supabase
           .from("tareas")
           .select("id")
           .eq("usuario_id", user.id)
           .eq("codigo_id", t.codigo_id)
           .maybeSingle();
-
-        if (errorCheck) console.error("Error al verificar tarea:", errorCheck);
 
         if (tareaExistente) {
           tareaRealId = tareaExistente.id;
@@ -176,11 +193,10 @@ export default function SuperTaskManager() {
               usuario_id: user.id,
               codigo_id: t.codigo_id,
               proyecto_id: t.proyecto_id || null,
-              proyecto: t.proyecto || "General",
-              entregable: t.entregable || "General",
-              estado: "En Progreso",
+              estado_id: "en_progreso",
               fecha: hoy,
-              revision: "pendiente"
+              revision_id: "pendiente",
+              horas: 0 // Base inicia en cero horas acumuladas
             }])
             .select("id")
             .single();
@@ -192,7 +208,7 @@ export default function SuperTaskManager() {
         registrosPlan.push({
           usuario_id: user.id,
           tarea_id: tareaRealId, 
-          estado_plan: "propuesto", 
+          estado_plan_id: "propuesto", 
           fecha: hoy,
           progreso_reportado: 0,
           horas_reales: 0
@@ -231,45 +247,59 @@ export default function SuperTaskManager() {
         fileUrl = publicUrl;
       }
 
-      const estadoTarea = parseInt(progreso) >= 100 ? "Completada" : "En Progreso";
+      // 🔍 LÓGICA DE ACUMULACIÓN DE HORAS HISTÓRICAS
+      // Primero consultamos cuántas horas llevaba acumuladas esta tarea en días anteriores
+      const { data: tareaActual, error: errorFetchTarea } = await supabase
+        .from("tareas")
+        .select("horas")
+        .eq("id", showReportingModal.tarea_id)
+        .single();
 
-      // 1. Actualizar planificacion_diaria
-      const { error: errorPlan } = await supabase
-        .from("planificacion_diaria")
-        .update({
-          horas_reales: parseFloat(horas),
-          progreso_reportado: progreso,
-          comentarios_cierre: comentario,
-          evidencia_url: fileUrl,
-          estado_plan: "finalizado"
-        })
-        .eq("id", showReportingModal.plan_id);
+      if (errorFetchTarea) throw errorFetchTarea;
 
-      if (errorPlan) throw errorPlan;
+      const horasAnteriores = parseFloat(tareaActual?.horas || 0);
+      const horasNuevasDeHoy = parseFloat(horas);
+      const totalHorasAcumuladas = horasAnteriores + horasNuevasDeHoy; // 🌟 SUMA DE LOS DOS O MÁS REPORTES
 
-      // 2. Actualizar la ejecución real en la tabla `tareas`
+      // Determinar estado final de la tarea global
+      const estadoTareaGlobal = parseInt(progreso) >= 100 ? "completada" : "en_progreso";
+
+      // 1. Actualizar la ejecución real acumulada en la tabla `tareas`
       const { error: errorTarea } = await supabase
         .from("tareas")
         .update({
-          estado: estadoTarea,
-          horas: parseFloat(horas),
-          evidencia_url: fileUrl,
-          entregable: showReportingModal.entregable
+          estado_id: estadoTareaGlobal,
+          horas: totalHorasAcumuladas, // Guardamos el total sumado e histórico
+          evidencia_url: fileUrl || tareaActual?.evidencia_url
         })
         .eq("id", showReportingModal.tarea_id);
 
       if (errorTarea) throw errorTarea;
+
+      // 2. Actualizar planificacion_diaria para congelar de forma aislada el día de HOY
+      const { error: errorPlan } = await supabase
+        .from("planificacion_diaria")
+        .update({
+          horas_reales: horasNuevasDeHoy, // Guarda solo las horas dedicadas HOY
+          progreso_reportado: parseInt(progreso), 
+          comentarios_cierre: comentario,
+          evidencia_url: fileUrl,
+          estado_plan_id: "aprobado" // Mantenemos "aprobado" para respetar la FK maestra de tu BD
+        })
+        .eq("id", showReportingModal.plan_id);
+
+      if (errorPlan) throw errorPlan;
 
       setShowReportingModal(null);
       setProgreso(0);
       setComentario("");
       setFile(null);
       await fetchData();
-      alert("¡Reporte guardado con éxito!");
+      alert("¡Reporte diario guardado y horas acumuladas con éxito!");
 
     } catch (err) {
-      console.error("❌ Error al reportar:", err);
-      alert("Error al guardar horas: " + err.message);
+      console.error("❌ Error detallado al reportar:", err.message || err);
+      alert("Error al guardar horas: " + (err.message || "Error desconocido"));
     } finally {
       setUploading(false);
     }
@@ -325,8 +355,8 @@ export default function SuperTaskManager() {
                         <span className="bg-slate-900 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-tighter">
                           {task.codigo || 'S/C'}
                         </span>
-                        <span className={`text-[8px] font-black px-2 py-1 rounded-md uppercase ${task.prioritaria ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                          {task.prioritaria ? 'Prioritaria' : 'En Backlog'}
+                        <span className={`text-[8px] font-black px-2 py-1 rounded-md uppercase ${task.estado_real === 'completada' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                          {task.estado_real === 'completada' ? 'Completada (Falta aprobación)' : `En Progreso (${task.progreso_actual || 0}%)`}
                         </span>
                       </div>
                       
@@ -340,7 +370,7 @@ export default function SuperTaskManager() {
 
                       <div className="flex items-center gap-4">
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{task.proyecto || "General"}</p>
-                        <span className="text-[9px] font-black text-[#37788a] uppercase">Base: {task.horas || 0} HH</span>
+                        <span className="text-[9px] font-black text-[#37788a] uppercase">Total Acumulado: {task.horas_acumuladas || 0} HH</span>
                       </div>
                     </div>
                     <button 
@@ -369,6 +399,17 @@ export default function SuperTaskManager() {
               </button>
             </div>
 
+            {dailyPlan.some(item => item.estado_plan_id === 'rechazado') && (
+              <div className="mb-6 p-4 bg-red-600/30 border border-red-400/50 rounded-3xl text-[11px] font-bold text-red-100 backdrop-blur-md">
+                ⚠️ <span className="uppercase font-black text-white">Tu planificación fue rechazada.</span> Corrige o cambia las tareas desde el Backlog y vuelve a enviarla.
+                {dailyPlan.find(item => item.comentario_admin)?.comentario_admin && (
+                  <p className="mt-2 text-white italic bg-black/20 p-2 rounded-xl text-[10px]">
+                    "Motivo: {dailyPlan.find(item => item.comentario_admin).comentario_admin}"
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="space-y-4 min-h-[300px]">
               {dailyPlan.map(item => (
                 <div key={item.plan_id || item.codigo_id} className="bg-white/10 backdrop-blur-2xl p-6 rounded-[2.5rem] border border-white/10 group transition-all">
@@ -378,17 +419,33 @@ export default function SuperTaskManager() {
                           {item.codigo || 'S/C'}
                         </span>
                         <p className="font-black text-sm uppercase leading-tight">{item.descripcion || "Tarea de Planificación"}</p>
+                        {item.ya_reportado && (
+                          <span className="text-[9px] block text-cyan-200 mt-1 font-bold">
+                            Reportado hoy: {item.horas_hoy} HH ({item.progreso_actual}%)
+                          </span>
+                        )}
                     </div>
                     
-                    {item.estado_plan === 'aprobado' ? (
-                      <button onClick={() => {
-                        setProgreso(item.progreso_actual || 0);
-                        setShowReportingModal(item);
-                      }} className="bg-white text-[#37788a] px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-orange-400 hover:text-white transition-all">Reportar</button>
-                    ) : item.estado_plan === 'finalizado' ? (
-                      <div className="p-3 bg-white/20 rounded-2xl text-white font-black text-[9px] uppercase italic tracking-widest">Listo</div>
-                    ) : item.estado_plan === 'rechazado' ? (
-                      <span className="text-[8px] font-black uppercase text-red-400 italic">Rechazado</span>
+                    {item.estado_plan_id === 'aprobado' ? (
+                      /* 🔑 CONTROL DE BLOQUEO CRÍTICO: Si ya fue reportado hoy, se bloquea sin importar el porcentaje */
+                      item.ya_reportado ? (
+                        <div className={`p-3 rounded-2xl font-black text-[9px] uppercase italic tracking-widest text-center border ${
+                          item.progreso_actual >= 100 
+                            ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30' 
+                            : 'bg-orange-500/20 text-orange-300 border-orange-500/30'
+                        }`}>
+                          {item.progreso_actual >= 100 ? "Completada" : "Reportada"}
+                        </div>
+                      ) : (
+                        <button onClick={() => {
+                          setProgreso(item.progreso_actual || 0);
+                          setShowReportingModal(item);
+                        }} className="bg-white text-[#37788a] px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-orange-400 hover:text-white transition-all">
+                          Reportar
+                        </button>
+                      )
+                    ) : item.estado_plan_id === 'rechazado' ? (
+                      <span className="text-[9px] font-black uppercase text-red-300 bg-red-900/40 px-3 py-1 rounded-xl italic">Rechazado</span>
                     ) : (
                       <span className="text-[8px] font-black uppercase text-orange-200 animate-pulse italic">En Revisión</span>
                     )}
@@ -405,7 +462,9 @@ export default function SuperTaskManager() {
 
             <div className="pt-10">
               {!isSent ? (
-                <button onClick={handleSendProposal} className="w-full bg-orange-400 hover:bg-orange-500 py-7 rounded-[2.5rem] font-black uppercase text-sm tracking-[0.2em] shadow-2xl transition-all transform active:scale-95">Activar Jornada</button>
+                <button onClick={handleSendProposal} className="w-full bg-orange-400 hover:bg-orange-500 py-7 rounded-[2.5rem] font-black uppercase text-sm tracking-[0.2em] shadow-2xl transition-all transform active:scale-95">
+                  {dailyPlan.some(item => item.estado_plan_id === 'rechazado') ? "Reenviar Jornada" : "Activar Jornada"}
+                </button>
               ) : (
                 <div className="text-center p-6 bg-slate-900/30 rounded-[2.5rem] border border-white/5 backdrop-blur-lg">
                   <p className="text-[11px] font-black text-white uppercase tracking-[0.4em]">Control de Jornada Activo</p>
@@ -434,7 +493,7 @@ export default function SuperTaskManager() {
               <div className="space-y-6">
                 <div className="bg-slate-50 p-8 rounded-[3rem] border border-slate-100 shadow-inner">
                   <div className="flex justify-between items-center mb-6">
-                    <label className="text-[10px] font-black uppercase text-slate-400">Progreso</label>
+                    <label className="text-[10px] font-black uppercase text-slate-400">Progreso Total Actual</label>
                     <span className="font-black text-4xl text-[#37788a]">{progreso}%</span>
                   </div>
                   <input type="range" className="w-full h-3 bg-slate-200 rounded-full appearance-none accent-[#37788a] cursor-pointer" value={progreso} onChange={(e) => setProgreso(e.target.value)} />
@@ -442,13 +501,13 @@ export default function SuperTaskManager() {
 
                 <div className="grid grid-cols-2 gap-6">
                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Horas Hoy</label>
+                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Horas de Hoy</label>
                     <input type="number" step="0.5" className="w-full bg-transparent font-black text-3xl outline-none text-slate-800" value={horas} onChange={(e) => setHoras(e.target.value)} />
                    </div>
                    <div className="bg-slate-900 p-6 rounded-3xl flex flex-col justify-center items-center">
-                    <label className="text-[10px] font-black uppercase text-slate-400 mb-2">Siguiente Estado</label>
+                    <label className="text-[10px] font-black uppercase text-slate-400 mb-2">Estado Resultante</label>
                     <span className="text-white font-black text-xs uppercase italic tracking-tighter">
-                      {progreso >= 100 ? "Completada" : "En Progreso"}
+                      {parseInt(progreso) >= 100 ? "Completada" : "En Progreso"}
                     </span>
                    </div>
                 </div>

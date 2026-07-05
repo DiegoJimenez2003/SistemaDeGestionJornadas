@@ -28,28 +28,49 @@ export default function TrackingAvanceAlloy() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return setLoading(false);
 
+    // 1. Traemos los entregables con su proyecto
     const [entregablesRes, tareasRes] = await Promise.all([
-      // IMPORTANTE: Traemos progreso_manual e id
-      supabase.from("entregables").select("id, nombre, proyecto_nombre, horas_presupuestadas, progreso_manual"),
-      supabase.from("tareas").select("entregable, proyecto, horas, estado").eq("usuario_id", user.id)
+      supabase.from("entregables").select("id, nombre, horas_presupuestadas, progreso_manual, proyectos(nombre)"),
+      // CORRECCIÓN: Traemos todo y la relación anidada para saber a qué entregable pertenece a través del código
+      supabase.from("tareas").select("*, codigos_tarea(*)").eq("usuario_id", user.id)
     ]);
 
     if (entregablesRes.data && tareasRes.data) {
       const consolidado = entregablesRes.data
         .map(ent => {
-          const tareasAsociadas = tareasRes.data.filter(
-            t => t.entregable === ent.nombre && t.proyecto === ent.proyecto_nombre
-          );
+          // Buscamos las tareas que correspondan a este entregable.
+          // Intentamos primero por t.entregable_id (si existiera), luego por t.codigos_tarea.entregable_id,
+          // o finalmente comparando por texto limpio por si acaso.
+          const tareasAsociadas = tareasRes.data.filter(t => {
+            const idPorCodigo = t.codigos_tarea?.entregable_id;
+            const idDirecto = t.entregable_id;
+            
+            // Si coincide el ID relacional o el ID directo de la tarea
+            if (idPorCodigo === ent.id || idDirecto === ent.id) return true;
+            
+            // Fallback por texto si las IDs fallan (Filtro seguro de respaldo)
+            if (t.entregable === ent.nombre || t.codigos_tarea?.entregable === ent.nombre) return true;
+            
+            return false;
+          });
+          
           const horasConsumidas = tareasAsociadas.reduce((acc, curr) => acc + parseFloat(curr.horas || 0), 0);
           const presupuesto = parseFloat(ent.horas_presupuestadas || 0);
           const porcentaje = presupuesto > 0 ? (horasConsumidas / presupuesto) * 100 : 0;
 
           const totalT = tareasAsociadas.length;
-          const completadasT = tareasAsociadas.filter(t => t.estado === "Completada").length;
+          // Validamos estado_id o estado en mayúsculas/minúsculas para que no se escape ninguna
+          const completadasT = tareasAsociadas.filter(t => {
+            const est = String(t.estado_id || t.estado || "").toLowerCase();
+            return est === "completada" || est === "completado";
+          }).length;
+          
           const porcentajeTareas = totalT > 0 ? (completadasT / totalT) * 100 : 0;
+          const nombreProyecto = ent.proyectos?.nombre || ent.proyecto_nombre || "Sin Proyecto";
 
           return {
             ...ent,
+            proyecto_nombre: nombreProyecto,
             consumido: horasConsumidas,
             porcentaje: porcentaje,
             hasActivity: tareasAsociadas.length > 0,
@@ -110,7 +131,6 @@ export default function TrackingAvanceAlloy() {
           </div>
           
           <div className="flex flex-wrap gap-3">
-            {/* NUEVO BOTÓN: IR AL HISTORIAL */}
             <a 
               href="/HistorialTareas" 
               className="flex items-center gap-3 bg-white border-2 border-slate-200 text-slate-600 px-6 py-3 rounded-full text-[10px] font-black uppercase italic transition-all hover:border-[#37788a] hover:text-[#37788a] active:scale-95 shadow-sm"
