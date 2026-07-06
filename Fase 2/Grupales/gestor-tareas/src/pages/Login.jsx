@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import DuocLogo from "../assets/logoduoc.png";
 
 const isValidDuocEmail = (email) =>
-  email.toLowerCase().endsWith("@duocuc.cl"); // Cambia por @duoc.cl si corresponde
+  email.toLowerCase().endsWith("@duocuc.cl") || email.toLowerCase().endsWith("@duoc.cl");
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -23,8 +23,6 @@ export default function Login() {
     const checkSession = async () => {
       const hash = window.location.hash;
       
-      // 1. Si hay rastro de recuperación en la URL, activamos modo recovery
-      // y abortamos cualquier otra lógica de este efecto.
       if (hash.includes("type=recovery") || hash.includes("access_token")) {
         setMode("recovery");
         return; 
@@ -44,10 +42,7 @@ export default function Login() {
       if (event === "PASSWORD_RECOVERY") {
         setMode("recovery");
       } 
-      // 2. SOLO navegamos al dashboard si el evento es inicio de sesión 
-      // Y NO estamos en modo recuperación.
       else if (event === "SIGNED_IN") {
-        // Revisamos la URL un segundo antes de redirigir
         if (!window.location.hash.includes("type=recovery")) {
           navigate("/dashboard");
         } else {
@@ -61,13 +56,12 @@ export default function Login() {
     };
   }, [navigate]);
 
-
   /* ===========================
       LOGIN
   ============================ */
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!isValidDuocEmail(email)) return alert("Correo inválido");
+    if (!isValidDuocEmail(email)) return alert("El correo debe pertenecer al dominio de Duoc UC (@duocuc.cl / @duoc.cl)");
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
@@ -76,31 +70,42 @@ export default function Login() {
   };
 
   /* ===========================
-       REGISTRO
+       REGISTRO (Ahora con Trigger automatizado)
   ============================ */
   const handleRegister = async (e) => {
     e.preventDefault();
-    if (!isValidDuocEmail(email)) return alert("Correo inválido");
+    if (!isValidDuocEmail(email)) return alert("El correo debe pertenecer al dominio de Duoc UC (@duocuc.cl / @duoc.cl)");
     if (!email || !password || !nombre || !apellido || !fechaNacimiento || !fechaIngreso || !cargo) {
       return alert("Por favor, completa todos los campos.");
     }
     if (password !== confirmPassword) return alert("Las contraseñas no coinciden.");
 
     setLoading(true);
+    
+    // Los datos del perfil se envían en options.data para que el Trigger los capture en la BD
     const { data, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { nombre, apellido, cargo, fecha_nacimiento: fechaNacimiento, fecha_ingreso: fechaIngreso },
+        data: { 
+          nombre, 
+          apellido, 
+          cargo, 
+          fecha_nacimiento: fechaNacimiento, 
+          fecha_ingreso: fechaIngreso 
+        },
       },
     });
 
     setLoading(false);
-    if (authError) return alert("Error: " + authError.message);
+    if (authError) return alert("Error al registrarse: " + authError.message);
 
     if (data?.user) {
-      alert("¡Cuenta creada con éxito!");
+      alert("¡Cuenta creada con éxito! El perfil se ha generado automáticamente.");
       setMode("login");
+      setEmail("");
+      setPassword("");
+      setConfirmPassword("");
     }
   };
 
@@ -161,44 +166,44 @@ export default function Login() {
         >
           {mode === "recovery" ? (
             <>
-              <input type="password" placeholder="Nueva contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="input" required />
-              <input type="password" placeholder="Confirmar nueva contraseña" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="input" required />
+              <input type="password" placeholder="Nueva contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
+              <input type="password" placeholder="Confirmar nueva contraseña" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
             </>
           ) : (
             <>
               {mode === "register" && (
                 <>
-                  <input type="text" placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} className="input" required />
-                  <input type="text" placeholder="Apellido" value={apellido} onChange={(e) => setApellido(e.target.value)} className="input" required />
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <input type="text" placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
+                  <input type="text" placeholder="Apellido" value={apellido} onChange={(e) => setApellido(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex flex-col">
-                      <label className="mb-1 font-medium text-gray-700">Fecha de Nacimiento</label>
-                      <input type="date" value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#4b4b54]" required />
+                      <label className="mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Fecha de Nacimiento</label>
+                      <input type="date" value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
                     </div>
                     <div className="flex flex-col">
-                      <label className="mb-1 font-medium text-gray-700">Fecha de Ingreso</label>
-                      <input type="date" value={fechaIngreso} onChange={(e) => setFechaIngreso(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#4b4b54]" required />
+                      <label className="mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Fecha de Ingreso</label>
+                      <input type="date" value={fechaIngreso} onChange={(e) => setFechaIngreso(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
                     </div>
                   </div>
-                  <input type="text" placeholder="Cargo" value={cargo} onChange={(e) => setCargo(e.target.value)} className="input" required />
+                  <input type="text" placeholder="Cargo" value={cargo} onChange={(e) => setCargo(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
                 </>
               )}
 
-              <input type="email" placeholder="Correo" value={email} onChange={(e) => setEmail(e.target.value)} className="input" required />
-              <input type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="input" required />
+              <input type="email" placeholder="Correo corporativo" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
+              <input type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
               
               {mode === "register" && (
-                <input type="password" placeholder="Confirmar contraseña" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="input" required />
+                <input type="password" placeholder="Confirmar contraseña" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full p-3 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[#37788a]" required />
               )}
             </>
           )}
 
-          <button type="submit" disabled={loading} className="w-full py-3 bg-[#6ec5ac] hover:bg-[#5bb499] text-white font-bold rounded-lg mt-2 transition">
+          <button type="submit" disabled={loading} className="w-full py-3 bg-[#6ec5ac] hover:bg-[#5bb499] text-white font-bold rounded-lg mt-2 transition shadow-md disabled:opacity-50">
             {loading ? "Procesando..." : mode === "recovery" ? "Actualizar Contraseña" : mode === "login" ? "Iniciar sesión" : "Registrarse"}
           </button>
         </form>
 
-        <div className="mt-4 flex justify-between w-full text-sm">
+        <div className="mt-6 flex justify-between w-full text-sm">
           {mode === "recovery" ? (
              <button onClick={() => setMode("login")} className="text-[#37788a] font-semibold hover:underline w-full text-center">Cancelar</button>
           ) : mode === "login" ? (
@@ -207,7 +212,7 @@ export default function Login() {
               <button onClick={() => setMode("register")} className="text-[#6ec5ac] font-semibold hover:underline">Crea tu cuenta</button>
             </>
           ) : (
-            <button onClick={() => setMode("login")} className="text-[#37788a] font-semibold hover:underline">Volver al login</button>
+            <button onClick={() => setMode("login")} className="text-[#37788a] font-semibold hover:underline w-full text-center">Volver al login</button>
           )}
         </div>
       </div>

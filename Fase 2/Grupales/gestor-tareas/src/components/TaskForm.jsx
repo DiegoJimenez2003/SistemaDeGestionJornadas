@@ -11,18 +11,20 @@ export default function TaskForm() {
   const [solicitarNuevoProyecto, setSolicitarNuevoProyecto] = useState(false);
   const [solicitarNuevoEntregable, setSolicitarNuevoEntregable] = useState(false);
 
+  // Se inicializan los estados adaptados a los valores default de la BD (texto / minúsculas)
   const initialForm = {
     usuario_id: "",
     nombre_trabajador: "",
     fecha: "",
-    proyecto: "",
-    entregable: "",
+    proyecto: "",       // Se usa el nombre/texto para la propuesta manual
+    proyecto_id: "",    // ID real para la inserción en la tabla de tareas estándar
+    entregable: "",     // Se usa el nombre/texto para la propuesta manual
     codigo_id: "",
     codigo_propuesto: "",
     descripcion_manual: "", 
     horas: "",
-    estado: "Pendiente",
-    revision: "sin_revisar",
+    estado_id: "en_progreso",  // Acorde a la nueva BD ('en_progreso', 'completada', etc)
+    revision_id: "pendiente",  // Acorde a la nueva BD ('pendiente', etc)
   };
 
   const [form, setForm] = useState(initialForm);
@@ -49,22 +51,21 @@ export default function TaskForm() {
     init();
   }, []);
 
+  // Carga entregables basados en el ID del proyecto seleccionado (Nueva BD)
   useEffect(() => {
     async function loadEntregables() {
-      if (isManual && form.proyecto && !solicitarNuevoProyecto) {
-        const { data } = await supabase.from("entregables").select("nombre").eq("proyecto_nombre", form.proyecto);
+      if (isManual && form.proyecto_id && !solicitarNuevoProyecto) {
+        const { data } = await supabase.from("entregables").select("id, nombre").eq("proyecto_id", form.proyecto_id);
         setDbEntregables(data || []);
       }
     }
     loadEntregables();
-  }, [form.proyecto, isManual, solicitarNuevoProyecto]);
+  }, [form.proyecto_id, isManual, solicitarNuevoProyecto]);
 
   // FUNCIÓN PARA CARGAR CÓDIGOS FILTRANDO COMPLETADOS
   const loadCodes = async () => {
     if (!form.usuario_id || isManual) { setAssignedCodes([]); return; }
     
-    // Consultamos tareas_asignadas y traemos la información de codigos_tarea
-    // Además, traemos la columna 'estado' de la tabla 'tareas' relacionada por codigo_id
     const { data, error } = await supabase
       .from("tareas_asignadas")
       .select(`
@@ -74,13 +75,14 @@ export default function TaskForm() {
           descripcion, 
           proyecto, 
           entregable,
-          tareas ( estado )
+          proyecto_id,
+          tareas ( estado_id )
         )
       `)
       .eq("usuario_id", form.usuario_id);
 
     if (error) {
-      console.error("Error:", error);
+      console.error("Error cargando códigos:", error);
       return;
     }
 
@@ -89,9 +91,8 @@ export default function TaskForm() {
         .map(item => item.codigos_tarea)
         .filter(c => {
           if (!c) return false;
-          // Si tiene tareas registradas, verificamos que ninguna diga "Completada"
-          // Si no tiene tareas (array vacío), es una tarea nueva y debe mostrarse
-          const isFinished = c.tareas?.some(t => t.estado === "Completada");
+          // Ajustado al nuevo string 'completada' de la BD
+          const isFinished = c.tareas?.some(t => t.estado_id === "completada");
           return !isFinished;
         });
       
@@ -112,8 +113,22 @@ export default function TaskForm() {
         ...prev,
         codigo_id: value,
         proyecto: selected ? selected.proyecto : "",
+        proyecto_id: selected ? selected.proyecto_id : "",
         entregable: selected ? selected.entregable : ""
       }));
+    } else if (name === "proyecto" && isManual) {
+      // Si selecciona de la lista en modo manual, guardamos el ID y buscamos el nombre
+      if (solicitarNuevoProyecto) {
+        setForm(prev => ({ ...prev, proyecto: value, proyecto_id: "" }));
+      } else {
+        const selectedProj = dbProyectos.find(p => p.id === value);
+        setForm(prev => ({ 
+          ...prev, 
+          proyecto_id: value, 
+          proyecto: selectedProj ? selectedProj.nombre : "",
+          entregable: "" 
+        }));
+      }
     } else {
       setForm(prev => ({ ...prev, [name]: value }));
     }
@@ -134,7 +149,7 @@ export default function TaskForm() {
     setIsManual(!isManual);
     setSolicitarNuevoProyecto(false);
     setSolicitarNuevoEntregable(false);
-    setForm(prev => ({ ...prev, codigo_id: "", proyecto: "", entregable: "", descripcion_manual: "", codigo_propuesto: "" }));
+    setForm(prev => ({ ...prev, codigo_id: "", proyecto: "", proyecto_id: "", entregable: "", descripcion_manual: "", codigo_propuesto: "" }));
   };
 
   const handleSubmit = async (e) => {
@@ -142,24 +157,41 @@ export default function TaskForm() {
     if (!form.usuario_id || !form.fecha || (isManual ? !form.descripcion_manual : !form.codigo_id)) return alert("Faltan campos obligatorios.");
     setLoading(true);
     let error;
+
     if (isManual) {
       const { error: err } = await supabase.from("tareas_propuestas").insert([{
-        usuario_id: form.usuario_id, nombre_trabajador: form.nombre_trabajador, fecha: form.fecha, proyecto: form.proyecto,
-        entregable: form.entregable, codigo_propuesto: form.codigo_propuesto || "M-SOLICITUD", descripcion_propuesta: form.descripcion_manual,
-        horas: form.horas ? Number(form.horas) : 0, estado_revision: "pendiente_admin"
+        usuario_id: form.usuario_id, 
+        nombre_trabajador: form.nombre_trabajador, 
+        fecha: form.fecha, 
+        proyecto: form.proyecto,
+        entregable: form.entregable, 
+        codigo_propuesto: form.codigo_propuesto || "M-SOLICITUD", 
+        descripcion_propuesta: form.descripcion_manual,
+        horas: form.horas ? Number(form.horas) : 0, 
+        estado_revision: "pendiente_admin"
       }]);
       error = err;
     } else {
-      const { codigo_propuesto, descripcion_manual, ...payloadNormal } = form;
-      const { error: err } = await supabase.from("tareas").insert([{ ...payloadNormal, horas: form.horas ? Number(form.horas) : 0 }]);
+      // Inserción adaptada a la tabla "tareas" estructural
+      const { codigo_propuesto, descripcion_manual, proyecto, entregable, ...payloadNormal } = form;
+      const { error: err } = await supabase.from("tareas").insert([{
+        proyecto_id: payloadNormal.proyecto_id || null,
+        usuario_id: payloadNormal.usuario_id,
+        codigo_id: payloadNormal.codigo_id ? Number(payloadNormal.codigo_id) : null,
+        fecha: payloadNormal.fecha,
+        horas: form.horas ? Number(form.horas) : 0,
+        estado_id: payloadNormal.estado_id,       // 'en_progreso' o 'completada'
+        revision_id: payloadNormal.revision_id,   // 'pendiente'
+      }]);
       error = err;
     }
+
     setLoading(false);
     if (error) alert("Error: " + error.message);
     else { 
       alert("✅ Registro procesado con éxito."); 
       handleReset();
-      loadCodes(); // Recargamos para que si se marcó "Completada", ya no aparezca
+      loadCodes(); 
     }
   };
 
@@ -209,7 +241,7 @@ export default function TaskForm() {
                <div className="flex justify-between items-center relative z-10">
                   <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Información de Proyecto</span>
                   {isManual && (
-                    <button type="button" onClick={() => setSolicitarNuevoProyecto(!solicitarNuevoProyecto)} className="text-[9px] font-black text-orange-500 underline uppercase hover:text-orange-700">
+                    <button type="button" onClick={() => { setSolicitarNuevoProyecto(!solicitarNuevoProyecto); setForm(p => ({...p, proyecto: "", proyecto_id: ""})); }} className="text-[9px] font-black text-orange-500 underline uppercase hover:text-orange-700">
                       {solicitarNuevoProyecto ? "Volver a la lista" : "¿Proyecto nuevo?"}
                     </button>
                   )}
@@ -222,9 +254,9 @@ export default function TaskForm() {
                       solicitarNuevoProyecto ? (
                         <input name="proyecto" placeholder="Nombre del proyecto..." value={form.proyecto} onChange={handleChange} className="p-3 border border-orange-200 rounded-xl text-sm bg-white font-bold outline-none focus:ring-4 focus:ring-orange-50" />
                       ) : (
-                        <select name="proyecto" value={form.proyecto} onChange={handleChange} className="p-3 border border-gray-200 rounded-xl text-sm bg-white font-bold outline-none cursor-pointer">
+                        <select name="proyecto" value={form.proyecto_id} onChange={handleChange} className="p-3 border border-gray-200 rounded-xl text-sm bg-white font-bold outline-none cursor-pointer">
                           <option value="">Seleccionar Proyecto...</option>
-                          {dbProyectos.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
+                          {dbProyectos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                         </select>
                       )
                     ) : (
@@ -241,11 +273,11 @@ export default function TaskForm() {
                         <input name="entregable" placeholder="Nombre del entregable..." value={form.entregable} onChange={handleChange} className="p-3 border border-orange-200 rounded-xl text-sm bg-white font-bold outline-none focus:ring-4 focus:ring-orange-50" />
                       ) : (
                         <div className="relative">
-                          <select name="entregable" value={form.entregable} onChange={handleChange} disabled={!form.proyecto} className="w-full p-3 border border-gray-200 rounded-xl text-sm bg-white font-bold disabled:opacity-50 cursor-pointer outline-none">
+                          <select name="entregable" value={form.entregable} onChange={handleChange} disabled={!form.proyecto_id} className="w-full p-3 border border-gray-200 rounded-xl text-sm bg-white font-bold disabled:opacity-50 cursor-pointer outline-none">
                             <option value="">Seleccionar Hito...</option>
                             {dbEntregables.map((e, idx) => <option key={idx} value={e.nombre}>{e.nombre}</option>)}
                           </select>
-                          {form.proyecto && !solicitarNuevoEntregable && (
+                          {form.proyecto_id && !solicitarNuevoEntregable && (
                             <button type="button" onClick={() => setSolicitarNuevoEntregable(true)} className="absolute -bottom-5 right-1 text-[8px] font-black text-orange-400 hover:text-orange-600">+ SOLICITAR OTRO</button>
                           )}
                         </div>
@@ -267,10 +299,9 @@ export default function TaskForm() {
               </div>
               <div>
                 <label className="font-black text-[10px] uppercase text-gray-300 ml-1">Estado de Avance</label>
-                <select name="estado" value={form.estado} onChange={handleChange} className="w-full mt-1.5 p-3.5 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold outline-none cursor-pointer">
-                  <option>Pendiente</option>
-                  <option>En progreso</option>
-                  <option>Completada</option>
+                <select name="estado_id" value={form.estado_id} onChange={handleChange} className="w-full mt-1.5 p-3.5 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold outline-none cursor-pointer">
+                  <option value="en_progreso">En progreso</option>
+                  <option value="completada">Completada</option>
                 </select>
               </div>
             </div>

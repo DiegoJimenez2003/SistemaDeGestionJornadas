@@ -234,8 +234,15 @@ export default function SuperTaskManager() {
       if (!user) throw new Error("Sin sesión activa");
 
       if (file) {
-        const userIdentifier = user.email ? user.email.split('@')[0].replace(/[.]/g, '_') : user.id;
-        const filePath = `${userIdentifier}/${Date.now()}_${file.name.replace(/\s/g, '_')}`;
+        // Usar preferentemente user.id que es un UUID limpio y seguro para crear carpetas en storage
+        const userIdentifier = user.id;
+        // Limpiamos el nombre del archivo quitando acentos y caracteres raros para evitar el Error 400
+        const cleanFileName = file.name
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "") // Quita tildes
+          .replace(/[^a-zA-Z0-9.]/g, "_"); // Cambia espacios y caracteres raros por guiones bajos
+
+        const filePath = `${userIdentifier}/${Date.now()}_${cleanFileName}`;
 
         const { error: uploadError } = await supabase.storage
           .from('evidencias_tareas')
@@ -248,20 +255,19 @@ export default function SuperTaskManager() {
       }
 
       // 🔍 LÓGICA DE ACUMULACIÓN DE HORAS HISTÓRICAS
-      // Primero consultamos cuántas horas llevaba acumuladas esta tarea en días anteriores
       const { data: tareaActual, error: errorFetchTarea } = await supabase
         .from("tareas")
-        .select("horas")
+        .select("horas, evidencia_url")
         .eq("id", showReportingModal.tarea_id)
+        .eq("usuario_id", user.id) // 🌟 CRÍTICO: Asegurar pertenencia para pasar el SELECT RLS
         .single();
 
       if (errorFetchTarea) throw errorFetchTarea;
 
       const horasAnteriores = parseFloat(tareaActual?.horas || 0);
       const horasNuevasDeHoy = parseFloat(horas);
-      const totalHorasAcumuladas = horasAnteriores + horasNuevasDeHoy; // 🌟 SUMA DE LOS DOS O MÁS REPORTES
+      const totalHorasAcumuladas = horasAnteriores + horasNuevasDeHoy; 
 
-      // Determinar estado final de la tarea global
       const estadoTareaGlobal = parseInt(progreso) >= 100 ? "completada" : "en_progreso";
 
       // 1. Actualizar la ejecución real acumulada en la tabla `tareas`
@@ -269,10 +275,11 @@ export default function SuperTaskManager() {
         .from("tareas")
         .update({
           estado_id: estadoTareaGlobal,
-          horas: totalHorasAcumuladas, // Guardamos el total sumado e histórico
+          horas: totalHorasAcumuladas, 
           evidencia_url: fileUrl || tareaActual?.evidencia_url
         })
-        .eq("id", showReportingModal.tarea_id);
+        .eq("id", showReportingModal.tarea_id)
+        .eq("usuario_id", user.id); // 🌟 SOLUCIÓN AL ERROR RLS: Obligatorio validar que le pertenece al usuario logueado
 
       if (errorTarea) throw errorTarea;
 
@@ -280,13 +287,14 @@ export default function SuperTaskManager() {
       const { error: errorPlan } = await supabase
         .from("planificacion_diaria")
         .update({
-          horas_reales: horasNuevasDeHoy, // Guarda solo las horas dedicadas HOY
+          horas_reales: horasNuevasDeHoy, 
           progreso_reportado: parseInt(progreso), 
           comentarios_cierre: comentario,
           evidencia_url: fileUrl,
-          estado_plan_id: "aprobado" // Mantenemos "aprobado" para respetar la FK maestra de tu BD
+          estado_plan_id: "aprobado" 
         })
-        .eq("id", showReportingModal.plan_id);
+        .eq("id", showReportingModal.plan_id)
+        .eq("usuario_id", user.id); // 🌟 SOLUCIÓN AL ERROR RLS: Obligatorio validar también aquí
 
       if (errorPlan) throw errorPlan;
 
