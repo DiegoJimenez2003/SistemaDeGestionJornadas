@@ -15,7 +15,7 @@ export default function HistorialTareas() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("No autenticado");
 
-      // Consulta con joins explícitos
+      // Consulta limpia con joins explícitos
       const { data, error } = await supabase
         .from("tareas")
         .select(`
@@ -36,9 +36,7 @@ export default function HistorialTareas() {
 
       if (error) throw error;
 
-      // REVISIÓN CLAVE: Mira esto en tu consola (F12)
       console.log("DEBUG TAREAS:", data);
-
       setTareas(data || []);
       
       const horas = (data || []).reduce((acc, t) => acc + (Number(t.horas) || 0), 0);
@@ -58,12 +56,23 @@ export default function HistorialTareas() {
     fetchHistorial();
   }, []);
 
+  // Función auxiliar para normalizar el estado técnico visible al usuario
+  const obtenerEstadoLegible = (estadoId) => {
+    const id = String(estadoId || "").toLowerCase().trim();
+    if (["completada", "completado", "finalizada", "finalizado", "terminada", "terminado", "resuelto", "resuelta"].includes(id)) {
+      return "Completada";
+    }
+    return "Pendiente";
+  };
+
   const filteredTareas = tareas.filter(t => {
-    const matchesStatus = filterStatus === "Todos" ? true : (t.estado || "Pendiente") === filterStatus;
+    // CORRECCIÓN: Evaluamos sobre el estado mapeado del campo real 'estado_id'
+    const estadoReal = obtenerEstadoLegible(t.estado_id);
+    const matchesStatus = filterStatus === "Todos" ? true : estadoReal === filterStatus;
+    
     const matchesDate = !dateFilter ? true : t.fecha === dateFilter;
     const search = searchTerm.toLowerCase();
     
-    // Lógica de extracción corregida para incluir t.proyecto (el campo texto de tu tabla)
     const nombreProyecto = 
       t.proyectos?.nombre || 
       t.proyecto || 
@@ -166,13 +175,14 @@ export default function HistorialTareas() {
                 <p className="text-slate-400 font-bold uppercase tracking-[0.3em] text-[10px]">Sincronizando Base de Datos</p>
             </div>
           ) : filteredTareas.map((t) => {
-            // Lógica corregida: Se añade t.proyecto para capturar el valor de la columna texto
             const nombreProyecto = 
               t.proyectos?.nombre || 
               t.proyecto || 
               (Array.isArray(t.proyectos) ? t.proyectos[0]?.nombre : null) ||
               t.codigos_tarea?.proyectos?.nombre || 
               'Proyecto No Asignado';
+
+            const estadoLegible = obtenerEstadoLegible(t.estado_id);
 
             return (
               <div key={t.id} className="group bg-white/70 backdrop-blur-sm p-3 rounded-[2.5rem] border border-white shadow-sm hover:shadow-2xl hover:shadow-indigo-500/10 hover:bg-white transition-all duration-500 flex flex-col md:flex-row items-center">
@@ -210,11 +220,11 @@ export default function HistorialTareas() {
                   </div>
 
                   <div className={`ml-auto px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    t.estado === 'Completada' 
+                    estadoLegible === 'Completada' 
                       ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 shadow-sm shadow-emerald-100/50' 
                       : 'bg-amber-50 text-amber-600 border border-amber-100 shadow-sm shadow-amber-100/50'
                   }`}>
-                    {t.estado || 'Pendiente'}
+                    {estadoLegible}
                   </div>
                 </div>
               </div>

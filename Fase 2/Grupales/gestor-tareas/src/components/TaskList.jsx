@@ -279,7 +279,7 @@ export default function SuperTaskManager() {
           evidencia_url: fileUrl || tareaActual?.evidencia_url
         })
         .eq("id", showReportingModal.tarea_id)
-        .eq("usuario_id", user.id); // 🌟 SOLUCIÓN AL ERROR RLS: Obligatorio validar que le pertenece al usuario logueado
+        .eq("usuario_id", user.id); 
 
       if (errorTarea) throw errorTarea;
 
@@ -294,8 +294,7 @@ export default function SuperTaskManager() {
           estado_plan_id: "aprobado" 
         })
         .eq("id", showReportingModal.plan_id)
-        .eq("usuario_id", user.id); // 🌟 SOLUCIÓN AL ERROR RLS: Obligatorio validar también aquí
-
+        .eq("usuario_id", user.id); 
       if (errorPlan) throw errorPlan;
 
       setShowReportingModal(null);

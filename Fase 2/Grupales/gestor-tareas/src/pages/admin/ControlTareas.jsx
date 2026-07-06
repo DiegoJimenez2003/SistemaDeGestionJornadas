@@ -10,7 +10,7 @@ export default function ControlTareas() {
   const fetchTareas = async () => {
     setLoading(true);
     try {
-      // 🚀 Consulta optimizada según tus llaves foráneas reales de la BD
+      // Consulta optimizada según tus llaves foráneas reales de la BD
       const { data, error } = await supabase
         .from("tareas")
         .select(`
@@ -79,14 +79,14 @@ export default function ControlTareas() {
             if (errorCod) throw errorCod;
         }
 
-        // 2. PAYLOAD LIMPIO: Campos estrictos de la tabla 'tareas'
+        // 2. PAYLOAD LIMPIO: Campos estrictos de la tabla 'tareas' (Cambiado a 'estado_id')
         const payload = {
           proyecto: editingTarea.proyecto || null,
           entregable: editingTarea.entregable || null,
           descripcion: editingTarea.descripcion || null,
           codigo_id: editingTarea.codigo_id,
           horas: parseFloat(editingTarea.horas) || 0,
-          estado: editingTarea.estado,
+          estado_id: editingTarea.estado_id, // <-- CORREGIDO: Campo real de la BD
           revision: editingTarea.revision || "pendiente",
           importancia: editingTarea.importancia || "Media",
           urgencia: editingTarea.urgencia || "Baja",
@@ -125,6 +125,11 @@ export default function ControlTareas() {
       codigo.toLowerCase().includes(search)
     );
   });
+
+  // Helper para mostrar visualmente los badges de forma prolija
+  const esCompletada = (estadoId) => {
+    return ["completada", "completado", "finalizada", "finalizado", "terminada", "terminado"].includes(String(estadoId || "").toLowerCase().trim());
+  };
 
   return (
     <div className="min-h-screen bg-[#f8fafc] p-4 md:p-8 font-sans text-slate-900">
@@ -169,6 +174,8 @@ export default function ControlTareas() {
               <tbody className="divide-y divide-slate-50">
                 {filteredTareas.map((t) => {
                   const nombreCompleto = t.perfiles ? `${t.perfiles.nombre || ''} ${t.perfiles.apellido || ''}` : (t.nombre_trabajador || "Sin asignar");
+                  const completada = esCompletada(t.estado_id);
+                  
                   return (
                     <tr key={t.id} className="hover:bg-indigo-50/20 transition-all group">
                       
@@ -231,11 +238,9 @@ export default function ControlTareas() {
 
                       <td className="p-6 text-center">
                         <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                          t.estado === 'Completada' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
-                          t.estado === 'En Progreso' ? 'bg-blue-100 text-blue-700 border-blue-200' :
-                          'bg-slate-50 text-slate-400 border-slate-100'
+                          completada ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-blue-100 text-blue-700 border-blue-200'
                         }`}>
-                          {t.estado || 'En Progreso'}
+                          {completada ? 'Completada' : 'En Progreso'}
                         </span>
                       </td>
 
@@ -307,11 +312,12 @@ export default function ControlTareas() {
                   <label className="text-[10px] font-black text-indigo-600 uppercase mb-2 block tracking-widest">Estado Real</label>
                   <select 
                     className="w-full bg-slate-50 border-2 border-slate-50 rounded-2xl px-5 py-4 outline-none focus:border-indigo-500 transition-all font-bold text-slate-700 shadow-inner"
-                    value={editingTarea.estado || 'En Progreso'}
-                    onChange={e => setEditingTarea({...editingTarea, estado: e.target.value})}
+                    value={editingTarea.estado_id || 'en_progreso'}
+                    onChange={e => setEditingTarea({...editingTarea, estado_id: e.target.value})}
                   >
-                    <option value="En Progreso">En Progreso</option>
-                    <option value="Completada">Completada</option>
+                    {/* Guardamos strings técnicos legibles en minúsculas */}
+                    <option value="en_progreso">En Progreso</option>
+                    <option value="completada">Completada</option>
                   </select>
                 </div>
               </div>
